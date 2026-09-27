@@ -15,7 +15,7 @@ import streamlit.components.v1 as components
 from langchain_core.messages import AIMessage, HumanMessage
 from streamlit_mic_recorder import mic_recorder
 
-from agent import DEFAULT_MODEL, build_agent, run_agent, transcribe_audio
+from agent import DEFAULT_MODEL, build_agent, list_chat_models, run_agent, transcribe_audio
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "jarvis_icon_256.png")
 
@@ -31,9 +31,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Fallback list; the sidebar refreshes this live from your Groq account.
 MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+    DEFAULT_MODEL,
     "openai/gpt-oss-20b",
 ]
 
@@ -161,6 +161,7 @@ def init_state() -> None:
         "executor": None,
         "api_key": _load_key_from_env(),
         "model": DEFAULT_MODEL,
+        "models": None,
         "ready": False,
         "tts_enabled": True,
         "voice_preset": "British (JARVIS)",
@@ -376,24 +377,52 @@ with st.sidebar:
     st.markdown('<div class="side-title">◉ SYSTEM CONTROL</div>', unsafe_allow_html=True)
     st.markdown("---")
 
-    key_val = st.text_input(
-        "Groq API key",
-        value=st.session_state.api_key,
-        type="password",
-        help="Get a free key at console.groq.com. Stored only in this session.",
-    )
+    key = st.session_state.api_key
+    if key:
+        # Key comes from .env / st.secrets / a previous unlock — never echo it back.
+        st.success("API key configured ✔ (hidden)", icon="🔑")
+        if st.button("Change key", use_container_width=True):
+            st.session_state.api_key = ""
+            st.session_state.ready = False
+            st.rerun()
+    else:
+        with st.expander("🔑 Unlock JARVIS (API key)", expanded=False):
+            st.caption("Stored only in this browser session — never shown again after unlock.")
+            entered = st.text_input(
+                "Groq API key",
+                value="",
+                type="password",
+                placeholder="gsk_...",
+                help="Get a free key at console.groq.com.",
+            )
+            if entered.strip() and entered.strip() != key:
+                st.session_state.api_key = entered.strip()
+                st.session_state.models = None
+                st.rerun()
+
+    if st.session_state.api_key and st.session_state.models is None:
+        try:
+            with st.spinner("Loading models from Groq..."):
+                st.session_state.models = list_chat_models(st.session_state.api_key)
+        except Exception:  # noqa: BLE001
+            st.session_state.models = list(MODELS)
+
+    model_choices = st.session_state.models or list(MODELS)
+    if DEFAULT_MODEL not in model_choices:
+        model_choices = [DEFAULT_MODEL] + model_choices
     model_val = st.selectbox(
-        "Model", MODELS,
-        index=MODELS.index(st.session_state.model) if st.session_state.model in MODELS else 0,
+        "Model", model_choices,
+        index=model_choices.index(st.session_state.model) if st.session_state.model in model_choices else 0,
+        help="Live list of models your Groq key can access.",
     )
 
     if st.button("⏻ INITIALIZE JARVIS", use_container_width=True):
-        if not key_val.strip():
-            st.error("Please enter your Groq API key first.")
+        if not st.session_state.api_key.strip():
+            st.error("Please unlock JARVIS with your Groq API key first.")
         else:
             try:
                 with st.spinner("Booting J.A.R.V.I.S. ..."):
-                    make_executor(key_val.strip(), model_val)
+                    make_executor(st.session_state.api_key.strip(), model_val)
                 st.success("Systems online.")
             except Exception as exc:  # noqa: BLE001
                 st.session_state.ready = False
@@ -520,7 +549,7 @@ st.session_state.pending_voice = None
 
 if prompt:
     if not st.session_state.ready:
-        st.warning("JARVIS is offline. Enter your Groq API key in the sidebar and press **INITIALIZE JARVIS**.")
+        st.warning("JARVIS is offline. Open **🔑 Unlock JARVIS** in the sidebar, enter your Groq API key and press **INITIALIZE JARVIS**.")
         st.stop()
     run_and_render(prompt)
 

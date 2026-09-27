@@ -187,6 +187,25 @@ def run_agent(
 WHISPER_MODEL = "whisper-large-v3-turbo"
 
 
+CHAT_MODEL_PREFIXES = (
+    "llama-", "meta-llama", "openai/gpt-oss", "qwen", "kimi", "mistral", "gemma",
+)
+
+
+def list_chat_models(api_key: str) -> list:
+    """Return Groq chat model IDs that this key can actually use (live from API)."""
+    from groq import Groq
+
+    client = Groq(api_key=api_key)
+    ids = []
+    for m in client.models.list().data:
+        mid = getattr(m, "id", "") or ""
+        low = mid.lower()
+        if any(low.startswith(p) for p in CHAT_MODEL_PREFIXES):
+            ids.append(mid)
+    return sorted(ids)
+
+
 def transcribe_audio(
     audio_bytes: bytes,
     api_key: str,
