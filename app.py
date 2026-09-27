@@ -119,18 +119,36 @@ st.markdown(
     background: linear-gradient(90deg, transparent, var(--jarvis), transparent);
     box-shadow: 0 0 10px rgba(55,230,255,.6); }
 
-.stChatMessage { background: rgba(9,20,32,.72); border: 1px solid rgba(55,230,255,.22);
-    border-radius: 14px; margin-bottom: .7rem; box-shadow: inset 0 0 22px rgba(55,230,255,.05); }
-.stChatMessage[data-testid="stChatMessageContent"] { color:#e6fbff; }
-.stChatMessage .stMarkdown p { line-height:1.5; }
-.stChatMessage .stMarkdown code { background: rgba(0,0,0,.45); color: var(--jarvis);
-    border:1px solid rgba(55,230,255,.25); border-radius:6px; padding:1px 5px; }
-.stChatMessage .stMarkdown pre { background:#04080f; border:1px solid rgba(55,230,255,.25); border-radius:10px; }
+.stChatMessage { background: rgba(9,20,32,.78); border: 1px solid rgba(55,230,255,.28);
+    border-radius: 14px; margin-bottom: .7rem; box-shadow: inset 0 0 22px rgba(55,230,255,.06); }
+
+/* Chat bubbles: Streamlit renders the text inside stChatMessageContent, and its
+   own muted colour made replies nearly invisible on the dark HUD, so set it
+   explicitly on every element type the markdown can produce. */
+[data-testid="stChatMessage"],
+[data-testid="stChatMessageContent"],
+[data-testid="stChatMessageContent"] p,
+[data-testid="stChatMessageContent"] li,
+[data-testid="stChatMessageContent"] span,
+[data-testid="stChatMessageContent"] strong,
+[data-testid="stChatMessageContent"] h1,
+[data-testid="stChatMessageContent"] h2,
+[data-testid="stChatMessageContent"] h3 { color: #f2fdff; }
+[data-testid="stChatMessageContent"] { font-size: 1.03rem; }
+[data-testid="stChatMessageContent"] p { line-height: 1.62; margin-bottom: .6rem; }
+[data-testid="stChatMessageContent"] a { color: var(--jarvis); text-decoration: underline; }
+[data-testid="stChatMessageContent"] code { background: rgba(0,0,0,.5); color: var(--jarvis);
+    border:1px solid rgba(55,230,255,.3); border-radius:6px; padding:1px 5px; }
+[data-testid="stChatMessageContent"] pre { background:#04080f; border:1px solid rgba(55,230,255,.3); border-radius:10px; }
+[data-testid="stStatusWidget"] { color: #bfe9f7; }
+[data-testid="stChatMessage"] img { background: transparent; }
 
 section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, rgba(6,16,26,.96), rgba(3,8,14,.96));
-    border-right: 1px solid rgba(55,230,255,.2); }
-section[data-testid="stSidebar"] .stMarkdown, section[data-testid="stSidebar"] label { color:#bfeeff; }
+    border-right: 1px solid rgba(55,230,255,.2);
+    position: relative; z-index: 2; }
+section[data-testid="stSidebar"] .stMarkdown, section[data-testid="stSidebar"] label { color:#d6f5ff; }
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color: #9fd8ea; }
 .side-title { color: var(--jarvis); letter-spacing:.25rem; font-weight:700; font-size:1rem; }
 .status-on { color:#5dffb0; } .status-off { color:#ff7a7a; }
 
@@ -141,9 +159,11 @@ section[data-testid="stSidebar"] .stMarkdown, section[data-testid="stSidebar"] l
 
 .stChatInput textarea { background: rgba(9,20,32,.9); border:1px solid rgba(55,230,255,.3);
     border-radius: 12px; color:#eafcff; }
-[data-testid="stBottomBlockContainer"] { background: transparent; }
+[data-testid="stBottom"] , [data-testid="stBottomBlockContainer"] {
+    background: transparent; position: relative; z-index: 2; }
+[data-testid="stChatInput"] textarea::placeholder { color: #8fc9dd; }
 .footnote { color: var(--jarvis-dim); font-size:.7rem; text-align:center; margin-top:.4rem; }
-.mic-hint { color: var(--jarvis-dim); font-size:.72rem; margin-top:.3rem; }
+.mic-hint { color: #9fd8ea; font-size:.72rem; margin-top:.3rem; }
 </style>
 """,
     unsafe_allow_html=True,
