@@ -14,7 +14,32 @@ datas = [
     ("assets", "assets"),
 ]
 binaries = []
+
+# app.py, agent.py and the tool modules ship as editable data files next to the
+# exe (jarvis_exe_main hands app.py to Streamlit, which then imports the rest),
+# so PyInstaller's analysis never sees their imports. Anything they need from the
+# standard library has to be listed here or the frozen app dies at runtime with
+# "No module named 'imaplib'" the first time the sidebar renders.
 hiddenimports = [
+    "imaplib",
+    "email",
+    "email.header",
+    "email.utils",
+    "email.message",
+    "html",
+    "html.parser",
+    "socket",
+    "ssl",
+    "threading",
+    "subprocess",
+    "shutil",
+    "webbrowser",
+    "ctypes",
+    "winreg",
+    "uuid",
+    "platform",
+    "pathlib",
+    "dataclasses",
     "streamlit_mic_recorder",
     "langchain",
     "langchain_core",
