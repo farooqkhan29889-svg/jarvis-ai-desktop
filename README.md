@@ -19,6 +19,7 @@ JARVIS is a tool-calling agent. It decides on its own when to use:
 | **Calculator** | Safe math (sqrt, trig, logs, powers…) |
 | **Date / time** | Current local date, weekday, time |
 | **Voice input** 🎙 | Record a command — transcribed by **Groq Whisper** |
+| **Wake word** 🗣 | *"Hello JARVIS"* — offline Windows listener, works with the window closed |
 | **Voice replies** 🔊 | JARVIS speaks its answers (British accent) via your browser |
 | **PC control** 🖥 | *Local desktop only* — open apps, websites, WhatsApp, and read/write files |
 | **Follow-up reminders** ⏰ | Saved list of tasks with due times; alerts you when one is due |
@@ -95,14 +96,30 @@ Guarantees:
   uses an en-GB voice; available voices depend on your OS/browser.
 - If a browser blocks auto-play audio, press **🔊 Replay last reply**.
 
-### Hands-free wake word ("Hey JARVIS")
-Turn on **Hands-free wake word** in the sidebar. JARVIS then listens continuously:
-1. Say **"Hey JARVIS"** → it chimes *"Yes, Sir?"* (status dot turns green).
-2. Speak your command → it's injected into the chat and answered + spoken aloud.
+### Always-on wake word — say "Hello JARVIS", any time
 
-> Requires **Chrome or Edge** (browser Speech Recognition). It is rendered above
-> the chat so it keeps listening across replies. The mic recorder + Whisper path
-> still works in any browser if the wake word is unavailable.
+Switch on **Always listen: "Hello JARVIS"** in the sidebar (under 🎙 VOICE). The
+wake word is then handled by **Windows itself**, in a small background process —
+not by the browser — so it works whether or not the JARVIS window is open:
+
+1. Say **"Hello JARVIS"** (or "Hey JARVIS").
+2. JARVIS answers *"Yes, Sir?"* and raises its window — starting it if it was closed.
+3. Speak your command ("what is the date today", "open Notepad"…). It arrives in
+   the chat, gets answered, and is read aloud like anything you type.
+   You can also say the command straight after the name in one breath.
+
+- **No internet, no API cost for listening.** Detection uses the *offline*
+  Windows desktop speech engine (`System.Speech`); only the answer goes to Groq.
+- **It survives a reboot.** Switching it on also drops a plain **JARVIS shortcut**
+  into your Startup folder, so the listener is back after sign-in. Remove the
+  shortcut (or the switch) and it is gone — nothing else is installed, no admin
+  rights needed.
+- **It keeps the PC awake while it listens** (sleep would deafen it). The display
+  still switches off normally.
+- **Opt-in:** the microphone is only in use while that switch is on. Flip it off
+  and the listener stops, the Startup shortcut is deleted, and the wish is unset.
+- Needs the Windows Speech Recognition engine for your display language (en-US by
+  default). If it is missing the sidebar tells you, and push-to-talk still works.
 
 ---
 
@@ -118,9 +135,14 @@ PyWebView window (WebView2 on Windows). Closing the window shuts the server down
 
 > **Desktop requirements:** Python 3.10+ and the **WebView2 Runtime** (preinstalled
 > on Windows 11 and most Windows 10 PCs; otherwise get it from Microsoft).
-> **Voice input note:** the mic/wake word need microphone permission inside the
-> window (`private_mode=False` is already set). If your WebView2 build blocks the
-> mic, run in Chrome/Edge instead — everything else works identically.
+> **Voice input note:** push-to-talk needs microphone permission inside the window
+> (`private_mode=False` is already set). The wake word does **not** rely on the
+> window at all — it runs natively, because the packaged window's engine cannot
+> reach a web speech service.
+
+> **Want it up before you ask?** Switch on **Always listen: "Hello JARVIS"** once
+> and JARVIS adds its own Startup shortcut, so it is running and listening every
+> time you sign in.
 
 ---
 
@@ -163,6 +185,8 @@ The app opens at `http://localhost:8501`.
    re-armed automatically when you change either one.
 4. Press **⏻ INITIALIZE JARVIS** — status turns **● ONLINE**.
 5. Type (or speak) a task in the box at the bottom.
+6. On your own PC, switch on **Always listen: "Hello JARVIS"** — that is what makes
+   JARVIS reachable at any moment, window open or not (see the wake word section).
 
 **Examples to try**
 - "What's the latest news on India's space program? Summarize in 3 bullets."
@@ -176,6 +200,8 @@ The app opens at `http://localhost:8501`.
 - ⏰ "Remind me to follow up with the lab tomorrow at 10." / "What follow-ups are open?"
 - ⏰ "Mark the lab one done." / "Remind me to check the register in 30 minutes."
 - ✉️ "Any new emails?" / "How many unread messages do I have?" / "Check for mail from Ali."
+- 🗣 With **Always listen** on: say **"Hello JARVIS"**, then *"what is the date today?"* —
+  from the desktop, the kitchen, or with JARVIS's window never opened.
 
 ---
 
@@ -198,6 +224,8 @@ jarvice-ai-dekstop/
 ├── system_control.py # sandboxed PC tools (apps, websites, WhatsApp, files)
 ├── followups.py      # reminder store, due-time parser and background watcher
 ├── email_control.py  # read-only IMAP inbox tools
+├── wakeword.py       # starts/stops the native "Hello JARVIS" listener + Startup entry
+├── wake_listener.ps1 # offline Windows speech listener (wake word -> command file)
 ├── desktop.py        # PyWebView wrapper -> native desktop window
 ├── requirements.txt
 ├── .env.example
@@ -229,6 +257,19 @@ jarvice-ai-dekstop/
   starts after the page has loaded once, and delivers on the next interaction.
 - **"Mail server refused the sign-in"?** Use an **app password** (Gmail needs
   2-Step Verification turned on first), not your normal password.
+- **Wake word hears nothing?** The sidebar dot should be 🟢 *Listening*. It uses
+  Windows' built-in speech engine and your default microphone, so check
+  Settings → Time & language → Speech is installed for your language, and that no
+  other app holds the mic exclusively. `~/.jarvis/wake_listener.log` records every
+  phrase it understood.
+- **Nothing wakes after a reboot?** Sign-in starts the listener, but a PC that is
+  powered off or hibernated cannot hear you — while listening, JARVIS only asks
+  Windows not to *sleep* (the display still switches off as usual).
+- **Where is my wake-word state kept?** `~/.jarvis/` — `wake_config.json` (your
+  wish + where JARVIS lives), `wake_status.json` (live listener status),
+  `wake_command.json` (the last dictated command), `wake_listener.log`. Delete the
+  folder to reset; the Startup shortcut is
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JARVIS.lnk`.
 - **Want a true installable desktop app (window, icon)?** Next step is wrapping
   this in PyWebView or porting the UI to Electron/Tauri — say the word.
 

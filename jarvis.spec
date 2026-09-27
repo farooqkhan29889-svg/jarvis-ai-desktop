@@ -11,6 +11,8 @@ datas = [
     ("system_control.py", "."),
     ("followups.py", "."),
     ("email_control.py", "."),
+    ("wakeword.py", "."),
+    ("wake_listener.ps1", "."),
     ("assets", "assets"),
 ]
 binaries = []

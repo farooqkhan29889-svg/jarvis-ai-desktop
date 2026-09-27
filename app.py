@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from datetime import datetime
 
 import streamlit as st
@@ -27,6 +28,7 @@ from agent import (
 from email_control import EmailConfig, from_env, test_connection
 from followups import list_upcoming, pop_due, start_scheduler
 from system_control import system_control_enabled
+import wakeword
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "jarvis_icon_256.png")
 
@@ -205,7 +207,7 @@ def init_state() -> None:
         "ready": False,
         "tts_enabled": True,
         "voice_preset": "British (JARVIS)",
-        "wake_word": False,
+        "always_on_note": "",
         "last_audio_hash": None,
         "pending_voice": None,
         "replay": False,
@@ -279,109 +281,53 @@ def speak(text: str) -> None:
     components.html(js, height=0)
 
 
-def render_wake_word() -> None:
-    """Hands-free wake word. Listens for 'Hey JARVIS' with the browser's Speech
-    Recognition, then captures the next utterance and injects it into the chat
-    input so the normal agent pipeline (and voice reply) handles it.
+def render_always_on() -> None:
+    """The native "Hello JARVIS" listener.
 
-    Requires Chrome/Edge. Rendered at a stable top-of-page position so chat
-    reruns don't remount it and drop the live microphone session.
+    This runs *outside* the window (Windows' offline speech engine in its own
+    process), so JARVIS is reachable at any moment - even when nothing of ours
+    is open. Turning it on also drops a sign-in entry so it survives a reboot.
     """
-    names, _rate, pitch = VOICE_PRESETS.get(
-        st.session_state.voice_preset, VOICE_PRESETS["British (JARVIS)"]
+    if not wakeword.is_supported():
+        st.caption("Hands-free wake word needs the Windows desktop app.")
+        return
+
+    live = wakeword.status()
+    want = st.toggle(
+        "Always listen: “Hello JARVIS”",
+        value=live["alive"],
+        help="Say “Hello JARVIS” anytime — even with JARVIS closed. It answers, opens the "
+             "window and listens for your command. Uses Windows' built-in offline speech.",
     )
-    cfg = {"names": names, "pitch": pitch, "tts": st.session_state.tts_enabled}
-    html = """
-<div id="ww" style="font-family:'Segoe UI',sans-serif;font-size:.8rem;letter-spacing:.05rem;
-     color:#9fe9ff;border:1px solid rgba(55,230,255,.25);background:rgba(9,20,32,.6);
-     border-radius:10px;padding:6px 12px;display:inline-block;">
-  <span id="ww-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;
-     background:#ff7a7a;margin-right:8px;box-shadow:0 0 8px #ff7a7a;"></span>
-  <span id="ww-msg">Starting hands-free…</span>
-</div>
-<script>
-(function(){
-  const cfg = __CFG__;
-  const dot = document.getElementById('ww-dot');
-  const msg = document.getElementById('ww-msg');
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const WAKE = ['jarvis','javis','jarvice','travis'];
+    if want != live["alive"]:
+        extra = ""
+        if want:
+            ok, msg = wakeword.enable()
+            wakeword.set_prefers_on(True)
+            if ok:
+                boot_ok, boot_msg = wakeword.install_startup()
+                extra = (" I will also start myself at sign-in." if boot_ok
+                         else f" (sign-in start failed: {boot_msg})")
+        else:
+            ok, msg = wakeword.disable()
+            wakeword.set_prefers_on(False)
+            wakeword.remove_startup()
+            extra = " JARVIS will no longer start at sign-in."
+        st.session_state.always_on_note = (msg if ok else f"⚠️ {msg}") + extra
+        st.rerun()
 
-  function set(state, text){
-    msg.textContent = text;
-    const colors = {idle:'#37e6ff', armed:'#5dffb0', off:'#ff7a7a'};
-    dot.style.background = colors[state] || '#37e6ff';
-    dot.style.boxShadow = '0 0 8px ' + (colors[state] || '#37e6ff');
-  }
-  function say(text){
-    if(!(cfg.tts && 'speechSynthesis' in window)) return;
-    try{ speechSynthesis.cancel(); }catch(e){}
-    const u = new SpeechSynthesisUtterance(text);
-    const voices = speechSynthesis.getVoices();
-    let v=null; for(const n of cfg.names){ v = voices.find(x=>x.name===n)||voices.find(x=>x.name&&x.name.includes(n)); if(v)break; }
-    if(!v) v = voices.find(x=>(x.lang||'').toLowerCase().startsWith('en-gb'));
-    if(v) u.voice=v; u.pitch=cfg.pitch; u.rate=1; speechSynthesis.speak(u);
-  }
-  function submit(text){
-    const doc = window.parent.document;
-    const ta = doc.querySelector('[data-testid="stChatInput"] textarea') || doc.querySelector('textarea');
-    if(!ta) return false;
-    const proto = window.parent.HTMLTextAreaElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto,'value').set;
-    setter.call(ta, text);
-    ta.dispatchEvent(new window.parent.Event('input',{bubbles:true}));
-    setTimeout(()=>{
-      ta.focus();
-      ['keydown','keypress','keyup'].forEach(type=>{
-        ta.dispatchEvent(new window.parent.KeyboardEvent(type,
-          {key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
-      });
-    }, 80);
-    return true;
-  }
-
-  if(!SR){ set('off','Hands-free needs Chrome or Edge'); return; }
-
-  const rec = new SR();
-  rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
-  let armed = false, armedAt = 0;
-
-  rec.onstart = ()=> set('idle', armed ? 'Listening for command…' : 'Say “Hey JARVIS”…');
-  rec.onerror = (e)=> { if(e.error==='not-allowed') set('off','Mic blocked — allow microphone'); };
-  rec.onend = ()=>{ try{ rec.start(); }catch(_){} };
-  rec.onresult = (e)=>{
-    let fin='', inter='';
-    for(let i=e.resultIndex;i<e.results.length;i++){
-      const t=e.results[i][0].transcript;
-      if(e.results[i].isFinal) fin+=t; else inter+=t;
-    }
-    const heard=(fin||inter).toLowerCase();
-    if(!armed){
-      if(WAKE.some(w=>heard.includes(w))){
-        armed=true; armedAt=Date.now(); set('armed','Listening for command…'); say('Yes, Sir?');
-      }
-    } else {
-      let cmd=(fin||'').trim();
-      if(!cmd) return;
-      let low=cmd.toLowerCase();
-      WAKE.forEach(w=>{ low=low.replace(new RegExp('^(hey |ok |okay )?'+w+'[,!.]?\\\\s*','i'),''); });
-      cmd=cmd.replace(/^[^a-z0-9]*/i,'');
-      // drop the wake word itself if that is all we got
-      const stripped=cmd.toLowerCase().replace(/^(hey |ok |okay )?/,'').replace(/[,.!]/g,'').trim();
-      if(!stripped || WAKE.includes(stripped)){ return; }
-      // remove a leading wake token from the command text
-      let clean=cmd;
-      const m=clean.match(/^(hey |ok |okay )?\\w+[,!.]?\\s+/i);
-      if(m && WAKE.some(w=>m[0].toLowerCase().includes(w))) clean=clean.slice(m[0].length);
-      clean=clean.trim();
-      if(clean.length>1){ submit(clean); armed=false; set('idle','Sent: “'+clean.slice(0,40)+'”'); say('On it, Sir.'); }
-    }
-  };
-  try{ rec.start(); }catch(_){}
-})();
-</script>
-"""
-    components.html(html.replace("__CFG__", json.dumps(cfg)), height=44)
+    state = live["state"]
+    dot = {"listening": "🟢", "armed": "🔵"}.get(state, "⚪")
+    label = {
+        "listening": "Listening for “Hello JARVIS”…",
+        "armed": "Heard you — say your command.",
+        "off": "Off — JARVIS will not wake to your voice.",
+    }.get(state, state)
+    st.caption(f"{dot} {label}")
+    if live["mode"] and state != "off":
+        st.caption(f"Offline engine: {live['mode']} · {live['engine']}")
+    if st.session_state.always_on_note:
+        st.caption(st.session_state.always_on_note)
 
 
 def run_and_render(prompt: str) -> None:
@@ -429,6 +375,13 @@ def run_and_render(prompt: str) -> None:
 
 
 init_state()
+
+# Hands-free is meant to survive restarts: if the user switched it on once, the
+# listener comes back with the app instead of waiting for another click.
+if not st.session_state.get("wake_checked"):
+    st.session_state.wake_checked = True
+    if wakeword.is_supported() and wakeword.prefers_on() and not wakeword.is_on():
+        wakeword.enable()
 
 # --------------------------------------------------------------------------- #
 # Sidebar
@@ -589,11 +542,7 @@ with st.sidebar:
         help="Available voices depend on your OS/browser. British = classic JARVIS.",
     )
 
-    st.session_state.wake_word = st.toggle(
-        "Hands-free wake word",
-        value=st.session_state.wake_word,
-        help='Say "Hey JARVIS" then your command. Uses browser speech recognition (Chrome/Edge).',
-    )
+    render_always_on()
 
     st.caption("Hold to record a voice command (transcribed by Groq Whisper):")
     audio = None
@@ -627,8 +576,26 @@ with st.sidebar:
         lines.append("\n\n**Follow-ups:** add · list · complete · remove (saved on disk)")
     if st.session_state.email_cfg.ready:
         lines.append("\n\n**Mailbox:** read-only inbox check")
+    if wakeword.is_on():
+        lines.append("\n\n**Hands-free:** say “Hello JARVIS” — I wake even when closed")
     lines.append("\n\nType or speak a task: research, calculate, summarise, plan, write, explain.")
     st.caption("".join(lines))
+
+# --------------------------------------------------------------------------- #
+# A key from .env means nobody has to click INITIALIZE: the desktop app is ready
+# the moment it opens - which is what lets a wake-word command run unattended.
+# --------------------------------------------------------------------------- #
+if (
+    not st.session_state.ready
+    and not st.session_state.get("boot_init_tried")
+    and st.session_state.api_key
+    and st.session_state.models
+):
+    st.session_state.boot_init_tried = True
+    try:
+        make_executor(st.session_state.api_key.strip(), st.session_state.model)
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.always_on_note = f"⚠️ Could not start automatically: {exc}"
 
 # --------------------------------------------------------------------------- #
 # Reminder scheduler: start the watcher, then surface anything due since the
@@ -684,11 +651,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Stable-position wake-word listener (rendered above chat history so adding
-# messages below never remounts it and interrupts the live microphone).
-if st.session_state.wake_word:
-    render_wake_word()
-
 # --------------------------------------------------------------------------- #
 # Chat history
 # --------------------------------------------------------------------------- #
@@ -704,7 +666,16 @@ for msg in st.session_state.messages:
 # --------------------------------------------------------------------------- #
 text_prompt = st.chat_input("Speak or type, Sir… give JARVIS a task")
 
-prompt = text_prompt or st.session_state.pending_voice
+# A command dictated to the native "Hello JARVIS" listener, if one just landed.
+# Only taken once JARVIS is initialised - until then it stays queued on disk,
+# so nothing you said out loud is silently thrown away.
+dictated = (
+    wakeword.pop_pending_command()
+    if wakeword.is_supported() and st.session_state.ready
+    else ""
+)
+
+prompt = text_prompt or st.session_state.pending_voice or dictated
 st.session_state.pending_voice = None
 
 if prompt:
@@ -725,3 +696,11 @@ st.markdown(
     '<div class="footnote">At your service · J.A.R.V.I.S. desktop assistant</div>',
     unsafe_allow_html=True,
 )
+
+# --------------------------------------------------------------------------- #
+# Hands-free tick: while the native listener holds the microphone, keep the page
+# re-running so a dictated command lands within a second or two of you saying it.
+# --------------------------------------------------------------------------- #
+if wakeword.is_supported() and wakeword.is_on():
+    time.sleep(1.2)
+    st.rerun()
