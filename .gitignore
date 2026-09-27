@@ -1,0 +1,28 @@
+# Python / venv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets - NEVER commit
+.env
+.streamlit/secrets.toml
+
+# Build artifacts (large) - regenerate with build_exe.bat
+dist/
+build/
+*.manifest
+
+# Logs
+*.log
+streamlit.log
+desktop_test.log
+exe_test*.log
+preflight.log
+build*.log
+
+# Local tooling / scratch
+.streamlit/secrets.toml
+vibe_images/
+.idea/
+.vscode/
