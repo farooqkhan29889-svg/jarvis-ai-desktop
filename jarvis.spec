@@ -9,6 +9,8 @@ datas = [
     ("app.py", "."),
     ("agent.py", "."),
     ("system_control.py", "."),
+    ("followups.py", "."),
+    ("email_control.py", "."),
     ("assets", "assets"),
 ]
 binaries = []

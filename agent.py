@@ -140,8 +140,16 @@ def wikipedia_lookup(query: str) -> str:
         return f"Wikipedia lookup failed: {exc}"
 
 
-def get_tools(pc_control: bool = False) -> list:
+def get_tools(pc_control: bool = False, reminders: bool = False, email_cfg=None) -> list:
     tools = [calculator, current_datetime, web_search, wikipedia_lookup]
+    if reminders:
+        from followups import REMINDER_TOOLS
+
+        tools += REMINDER_TOOLS
+    if email_cfg is not None and email_cfg.ready:
+        from email_control import make_email_tools
+
+        tools += make_email_tools(email_cfg)
     if pc_control:
         from system_control import get_pc_tools
 
@@ -153,8 +161,10 @@ def get_tools(pc_control: bool = False) -> list:
 # Agent construction
 # --------------------------------------------------------------------------- #
 
-def build_agent(api_key: str, model: str = DEFAULT_MODEL, pc_control: bool = False) -> AgentExecutor:
+def build_agent(api_key: str, model: str = DEFAULT_MODEL, pc_control: bool = False,
+                reminders: bool = True, email_cfg=None) -> AgentExecutor:
     """Create a ready-to-run AgentExecutor for the given Groq API key."""
+    from followups import REMINDER_NOTES
     from system_control import PC_CONTROL_NOTES
 
     llm = ChatGroq(
@@ -164,7 +174,15 @@ def build_agent(api_key: str, model: str = DEFAULT_MODEL, pc_control: bool = Fal
         streaming=False,
     )
 
-    system_prompt = SYSTEM_PROMPT + (PC_CONTROL_NOTES if pc_control else "")
+    system_prompt = SYSTEM_PROMPT
+    if pc_control:
+        system_prompt += PC_CONTROL_NOTES
+    if reminders:
+        system_prompt += REMINDER_NOTES
+    if email_cfg is not None and email_cfg.ready:
+        from email_control import EMAIL_NOTES
+
+        system_prompt += EMAIL_NOTES
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -175,7 +193,7 @@ def build_agent(api_key: str, model: str = DEFAULT_MODEL, pc_control: bool = Fal
         ]
     )
 
-    tools = get_tools(pc_control)
+    tools = get_tools(pc_control, reminders, email_cfg)
     agent = create_tool_calling_agent(llm, tools, prompt)
     return AgentExecutor(
         agent=agent,

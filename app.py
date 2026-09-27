@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -23,6 +24,8 @@ from agent import (
     run_agent,
     transcribe_audio,
 )
+from email_control import EmailConfig, from_env, test_connection
+from followups import list_upcoming, pop_due, start_scheduler
 from system_control import system_control_enabled
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "jarvis_icon_256.png")
@@ -175,7 +178,10 @@ def init_state() -> None:
         "model": DEFAULT_MODEL,
         "models": None,
         "pc_control": PC_CONTROL_AVAILABLE,
-        "pc_control_applied": False,
+        "caps_applied": None,
+        "reminders_on": True,
+        "email_cfg": from_env(),
+        "email_note": "",
         "ready": False,
         "tts_enabled": True,
         "voice_preset": "British (JARVIS)",
@@ -188,12 +194,25 @@ def init_state() -> None:
         st.session_state.setdefault(k, v)
 
 
+def current_caps() -> tuple:
+    """The capability set the running agent was built with."""
+    return (
+        bool(PC_CONTROL_AVAILABLE and st.session_state.pc_control),
+        bool(st.session_state.reminders_on),
+        bool(st.session_state.email_cfg.ready),
+    )
+
+
 def make_executor(api_key: str, model: str):
-    pc = bool(PC_CONTROL_AVAILABLE and st.session_state.pc_control)
-    st.session_state.executor = build_agent(api_key, model, pc_control=pc)
+    st.session_state.executor = build_agent(
+        api_key, model,
+        pc_control=bool(PC_CONTROL_AVAILABLE and st.session_state.pc_control),
+        reminders=st.session_state.reminders_on,
+        email_cfg=st.session_state.email_cfg if st.session_state.email_cfg.ready else None,
+    )
     st.session_state.api_key = api_key
     st.session_state.model = model
-    st.session_state.pc_control_applied = pc
+    st.session_state.caps_applied = current_caps()
     st.session_state.ready = True
 
 
@@ -351,6 +370,8 @@ def run_and_render(prompt: str) -> None:
     with st.chat_message("user", avatar=AVATAR_USER):
         st.markdown(prompt)
 
+    answer = ""
+    steps = []
     with st.chat_message("assistant", avatar=AVATAR_ASSISTANT):
         status = st.status("Processing…", expanded=False)
         try:
@@ -380,6 +401,11 @@ def run_and_render(prompt: str) -> None:
         # Strip code fences / markdown noise for a cleaner spoken reply.
         spoken = answer.split("```")[0][:1200]
         speak(spoken)
+
+    # A turn that changed the follow-up store: rerun so the sidebar list is current.
+    if {getattr(s[0], "tool", "") for s in steps} & {
+            "add_followup", "complete_followup", "remove_followup"}:
+        st.rerun()
 
 
 init_state()
@@ -440,14 +466,68 @@ with st.sidebar:
         )
         if st.session_state.pc_control:
             st.caption("JARVIS can open apps, websites and files on this computer.")
-        if st.session_state.ready and st.session_state.pc_control != st.session_state.pc_control_applied:
-            try:
-                make_executor(st.session_state.api_key.strip(), st.session_state.model)
-                st.toast("PC control re-armed.")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Re-arm failed: {exc}")
     elif os.environ.get("JARVIS_SYSTEM_CONTROL") != "1":
         st.caption("🖥 PC control is off — run the desktop app or `run.bat` to enable it.")
+
+    # ---- Follow-up reminders ----
+    st.session_state.reminders_on = st.toggle(
+        "⏰ Follow-up reminders", value=st.session_state.reminders_on,
+        help="JARVIS keeps a saved list of follow-ups and pops an alert when one is due.",
+    )
+    upcoming = list_upcoming() if st.session_state.reminders_on else []
+    if upcoming:
+        now = datetime.now()
+        for item in upcoming[:6]:
+            try:
+                overdue = datetime.strptime(item["due"], "%Y-%m-%d %H:%M") < now
+            except (KeyError, ValueError):
+                overdue = False
+            icon = "🔴" if overdue else "🟡"
+            st.caption(f"{icon} {item.get('due', '?')} — {item.get('text', '')[:60]}")
+        st.caption(f"{len(upcoming)} open follow-up(s). Ask JARVIS to list or close them.")
+    else:
+        st.caption("No follow-ups scheduled. Say *remind me to call Ali at 6*.")
+
+    # ---- Email (read-only) ----
+    cfg = st.session_state.email_cfg
+    if cfg.ready:
+        st.caption(f"✉️ Email connected: {cfg.masked()} (read-only)")
+        if st.button("Disconnect email", use_container_width=True):
+            st.session_state.email_cfg = EmailConfig("", "")
+            st.session_state.email_note = ""
+            st.rerun()
+    else:
+        with st.expander("✉️ Connect email (read-only)", expanded=False):
+            st.caption("Needs an **app password** (Gmail/Outlook/Yahoo with 2-step verification). "
+                       "JARVIS only ever reads — it cannot send, delete or mark mail.")
+            addr = st.text_input("Email address", value="", placeholder="you@gmail.com",
+                                 key="_email_addr")
+            pwd = st.text_input("App password", value="", type="password",
+                                placeholder="xxxx xxxx xxxx xxxx", key="_email_pwd")
+            host = st.text_input("IMAP host (optional — auto-detected)", value="",
+                                 placeholder="imap.gmail.com", key="_email_host")
+            if st.button("Connect mailbox", use_container_width=True):
+                if not addr.strip() or not pwd:
+                    st.error("Enter the address and its app password.")
+                else:
+                    trial = EmailConfig(addr.strip(), pwd, host.strip())
+                    try:
+                        with st.spinner("Signing in..."):
+                            st.session_state.email_note = test_connection(trial)
+                        st.session_state.email_cfg = trial
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Could not connect: {exc}")
+            if st.session_state.email_note:
+                st.success(st.session_state.email_note)
+
+    caps = current_caps()
+    if st.session_state.ready and caps != st.session_state.caps_applied:
+        try:
+            make_executor(st.session_state.api_key.strip(), st.session_state.model)
+            st.toast("Capabilities re-armed.")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Re-arm failed: {exc}")
 
     if st.button("⏻ INITIALIZE JARVIS", use_container_width=True):
         if not st.session_state.api_key.strip():
@@ -465,8 +545,12 @@ with st.sidebar:
     if st.session_state.ready:
         st.markdown('STATUS: <span class="status-on">● ONLINE</span>', unsafe_allow_html=True)
         st.caption(f"Model: {st.session_state.model}")
-        if st.session_state.pc_control:
+        if st.session_state.pc_control and PC_CONTROL_AVAILABLE:
             st.caption("🖥 PC control: armed")
+        if st.session_state.reminders_on:
+            st.caption("⏰ Reminders: armed")
+        if st.session_state.email_cfg.ready:
+            st.caption("✉️ Mailbox: linked")
     else:
         st.markdown('STATUS: <span class="status-off">● OFFLINE</span>', unsafe_allow_html=True)
 
@@ -516,14 +600,31 @@ with st.sidebar:
         st.session_state.pending_voice = None
         st.rerun()
 
-    pc_line = (
-        "\n\n**PC control:** apps · websites · WhatsApp · files & folders"
-        if (PC_CONTROL_AVAILABLE and st.session_state.pc_control) else ""
-    )
-    st.caption(
-        "**Tools:** web search · Wikipedia · calculator · date/time · voice" + pc_line + "\n\n"
-        "Type or speak a task: research, calculate, summarise, plan, write, explain."
-    )
+    lines = ["**Tools:** web search · Wikipedia · calculator · date/time · voice"]
+    if PC_CONTROL_AVAILABLE and st.session_state.pc_control:
+        lines.append("\n\n**PC control:** apps · websites · WhatsApp · files & folders")
+    if st.session_state.reminders_on:
+        lines.append("\n\n**Follow-ups:** add · list · complete · remove (saved on disk)")
+    if st.session_state.email_cfg.ready:
+        lines.append("\n\n**Mailbox:** read-only inbox check")
+    lines.append("\n\nType or speak a task: research, calculate, summarise, plan, write, explain.")
+    st.caption("".join(lines))
+
+# --------------------------------------------------------------------------- #
+# Reminder scheduler: start the watcher, then surface anything due since the
+# last rerun (native popup already fired; this keeps it visible in the chat).
+# --------------------------------------------------------------------------- #
+if st.session_state.reminders_on:
+    start_scheduler()
+    due = pop_due()
+    for item in due:
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": (f"⏰ **Follow-up due** — {item.get('text', '')} "
+                        f"_(scheduled {item.get('due', '')})_"),
+        })
+    if due and st.session_state.tts_enabled:
+        speak("Reminder, Sir. " + "; ".join(str(i.get("text", "")) for i in due))
 
 # --------------------------------------------------------------------------- #
 # Handle voice recording -> transcription

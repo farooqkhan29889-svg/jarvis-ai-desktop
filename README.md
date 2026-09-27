@@ -21,6 +21,8 @@ JARVIS is a tool-calling agent. It decides on its own when to use:
 | **Voice input** 🎙 | Record a command — transcribed by **Groq Whisper** |
 | **Voice replies** 🔊 | JARVIS speaks its answers (British accent) via your browser |
 | **PC control** 🖥 | *Local desktop only* — open apps, websites, WhatsApp, and read/write files |
+| **Follow-up reminders** ⏰ | Saved list of tasks with due times; alerts you when one is due |
+| **Email check** ✉️ | *Read-only* inbox — newest messages and unread count over IMAP |
 
 ### PC control (local `.exe` / `run.bat` / `run_desktop.bat` only)
 
@@ -45,6 +47,46 @@ Guarantees baked in:
   the packaged `.exe`. Toggle **🖥 Control this PC** in the sidebar to disable it.
 
 The interface is a glowing cyan HUD with an animated arc reactor.
+
+### Follow-up reminders ⏰
+
+Works in the desktop app *and* the hosted page — reminders are stored per user,
+not on the website's server.
+
+Say *"remind me to call Ali at 6"*, *"follow up with the supplier in 2 hours"*,
+*"what's on my follow-up list?"*, *"close the Ali one"*. JARVIS parses the time
+itself (`in 45 minutes`, `tomorrow 9am`, `at 6`, `next week`, `Mon`, or a full
+`2026-09-30 14:00`) and calls:
+
+`add_followup` · `list_followups` · `complete_followup` · `remove_followup`
+
+A background watcher checks the list every 15 seconds. When something is due you
+get a **native Windows popup** (desktop app), a line in the chat, and the reply
+read aloud. The sidebar shows the queue with 🔴 for overdue and 🟡 for pending.
+
+- Saved in `~/.jarvis/followups.json` (override the folder with env `JARVIS_HOME`).
+- Turn the whole feature off with the **⏰ Follow-up reminders** sidebar toggle.
+
+### Email check ✉️ (strictly read-only)
+
+Open **✉️ Connect email (read-only)** in the sidebar, enter your address and an
+**app password** (Gmail/Outlook/Yahoo need this — a normal password is refused).
+The IMAP host is auto-detected from the domain, or set it yourself.
+
+`check_email` (newest messages, unread-only, or "containing <word>") ·
+`count_unread_email`
+
+Guarantees:
+
+- **It cannot send, delete, move or mark mail.** The inbox is opened read-only and
+  messages are fetched with `BODY.PEEK`, so nothing changes and unread stays unread.
+- **Your password never appears on screen again** and stays in your own session —
+  it is not written to disk by the app and is not shared with other viewers of a
+  hosted deployment.
+- Prefer `.env` on your own machine: `JARVIS_EMAIL_USER`, `JARVIS_EMAIL_PASSWORD`,
+  optional `JARVIS_EMAIL_HOST` / `JARVIS_EMAIL_PORT`.
+- **Gmail:** turn on 2-Step Verification, then create an
+  [App Password](https://myaccount.google.com/apppasswords).
 
 ### Voice
 - **Input:** in the sidebar, press **🎙 Record**, speak, then **⏹ Stop**. Your
@@ -117,6 +159,8 @@ The app opens at `http://localhost:8501`.
 2. Pick a model — the list is read live from your Groq account, so only models
    your key can actually use are offered.
 3. On the desktop app, leave **🖥 Control this PC** on if you want it to open apps and files.
+   Switch **⏰ Follow-up reminders** and **✉️ Connect email** to taste — the agent is
+   re-armed automatically when you change either one.
 4. Press **⏻ INITIALIZE JARVIS** — status turns **● ONLINE**.
 5. Type (or speak) a task in the box at the bottom.
 
@@ -129,6 +173,9 @@ The app opens at `http://localhost:8501`.
 - 🖥 "Open Notepad." / "Open WhatsApp and message +9198765xxxxx saying I'll be late."
 - 🖥 "Search YouTube for stomach exercises and show me." / "What files are on my Desktop?"
 - 🖥 "Save these notes to Documents/clinic-notes.md."
+- ⏰ "Remind me to follow up with the lab tomorrow at 10." / "What follow-ups are open?"
+- ⏰ "Mark the lab one done." / "Remind me to check the register in 30 minutes."
+- ✉️ "Any new emails?" / "How many unread messages do I have?" / "Check for mail from Ali."
 
 ---
 
@@ -149,6 +196,8 @@ jarvice-ai-dekstop/
 ├── app.py            # Streamlit JARVIS interface (HUD, chat, voice, wake word)
 ├── agent.py          # LangChain + Groq agent, tools, and Whisper transcription
 ├── system_control.py # sandboxed PC tools (apps, websites, WhatsApp, files)
+├── followups.py      # reminder store, due-time parser and background watcher
+├── email_control.py  # read-only IMAP inbox tools
 ├── desktop.py        # PyWebView wrapper -> native desktop window
 ├── requirements.txt
 ├── .env.example
@@ -171,8 +220,15 @@ jarvice-ai-dekstop/
   it via git (`.venv` is git-ignored). The recipient just double-clicks `run.bat`
   and pastes their own Groq key.
 - **Web search empty?** DuckDuckGo occasionally rate-limits; retry in a moment.
-- **Model errors?** Some Groq models don't support tool-calling. Use
-  `llama-3.3-70b-versatile` or `llama-3.1-8b-instant`.
+- **Model errors (404 "model does not exist")?** Groq's available models differ per
+  account. The sidebar reads your key's real list from the API, so pick from that —
+  `openai/gpt-oss-120b`, `gpt-oss-20b` or `llama-3.3-70b-versatile` all handle
+  tool-calling; small `allam-2-7b` style models often do not.
+- **No reminder popup?** The native popup needs the desktop app on Windows; in a
+  browser the due reminder appears in the chat and is spoken aloud. The watcher only
+  starts after the page has loaded once, and delivers on the next interaction.
+- **"Mail server refused the sign-in"?** Use an **app password** (Gmail needs
+  2-Step Verification turned on first), not your normal password.
 - **Want a true installable desktop app (window, icon)?** Next step is wrapping
   this in PyWebView or porting the UI to Electron/Tauri — say the word.
 
