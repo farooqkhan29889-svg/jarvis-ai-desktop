@@ -2,7 +2,8 @@
 
 Builds a LangChain tool-calling agent backed by Groq and exposes a few
 practical tools so it can actually carry out tasks (search the web, look
-things up on Wikipedia, do math, tell the time/date).
+things up on Wikipedia, do math, tell the time/date).  On the local desktop
+build it also mounts the sandboxed PC-control tools from `system_control`.
 """
 
 from __future__ import annotations
@@ -25,7 +26,15 @@ try:
 except ImportError:  # pragma: no cover
     from langchain.agents import AgentExecutor, create_tool_calling_agent
 
+# Preferred order; the actual default is resolved per key in pick_default_model().
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+MODEL_PREFERENCES = (
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+)
 
 SYSTEM_PROMPT = (
     "You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), a highly "
@@ -131,16 +140,23 @@ def wikipedia_lookup(query: str) -> str:
         return f"Wikipedia lookup failed: {exc}"
 
 
-def get_tools() -> list:
-    return [calculator, current_datetime, web_search, wikipedia_lookup]
+def get_tools(pc_control: bool = False) -> list:
+    tools = [calculator, current_datetime, web_search, wikipedia_lookup]
+    if pc_control:
+        from system_control import get_pc_tools
+
+        tools += get_pc_tools()
+    return tools
 
 
 # --------------------------------------------------------------------------- #
 # Agent construction
 # --------------------------------------------------------------------------- #
 
-def build_agent(api_key: str, model: str = DEFAULT_MODEL) -> AgentExecutor:
+def build_agent(api_key: str, model: str = DEFAULT_MODEL, pc_control: bool = False) -> AgentExecutor:
     """Create a ready-to-run AgentExecutor for the given Groq API key."""
+    from system_control import PC_CONTROL_NOTES
+
     llm = ChatGroq(
         model=model,
         temperature=0.2,
@@ -148,21 +164,24 @@ def build_agent(api_key: str, model: str = DEFAULT_MODEL) -> AgentExecutor:
         streaming=False,
     )
 
+    system_prompt = SYSTEM_PROMPT + (PC_CONTROL_NOTES if pc_control else "")
+
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", SYSTEM_PROMPT),
+            ("system", system_prompt),
             MessagesPlaceholder(variable_name="chat_history", optional=True),
             ("human", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ]
     )
 
-    agent = create_tool_calling_agent(llm, get_tools(), prompt)
+    tools = get_tools(pc_control)
+    agent = create_tool_calling_agent(llm, tools, prompt)
     return AgentExecutor(
         agent=agent,
-        tools=get_tools(),
+        tools=tools,
         verbose=False,
-        max_iterations=6,
+        max_iterations=8,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
     )
@@ -188,8 +207,12 @@ WHISPER_MODEL = "whisper-large-v3-turbo"
 
 
 CHAT_MODEL_PREFIXES = (
-    "llama-", "meta-llama", "openai/gpt-oss", "qwen", "kimi", "mistral", "gemma",
+    "llama-", "meta-llama/", "openai/gpt-oss", "qwen/", "kimi", "mistral", "gemma",
+    "allam-", "grok-", "deepseek",
 )
+
+# Safety/moderation and non-chat endpoints that would fail as a conversation model.
+NON_CHAT_MARKERS = ("guard", "safeguard", "embed", "whisper", "tts", "prompt", "safety", "audio")
 
 
 def list_chat_models(api_key: str) -> list:
@@ -201,9 +224,20 @@ def list_chat_models(api_key: str) -> list:
     for m in client.models.list().data:
         mid = getattr(m, "id", "") or ""
         low = mid.lower()
-        if any(low.startswith(p) for p in CHAT_MODEL_PREFIXES):
-            ids.append(mid)
+        if not low.startswith(CHAT_MODEL_PREFIXES):
+            continue
+        if any(k in low for k in NON_CHAT_MARKERS):
+            continue
+        ids.append(mid)
     return sorted(ids)
+
+
+def pick_default_model(available: list) -> str:
+    """Best model this key can use, in preference order."""
+    for candidate in MODEL_PREFERENCES:
+        if candidate in available:
+            return candidate
+    return available[0] if available else DEFAULT_MODEL
 
 
 def transcribe_audio(

@@ -52,6 +52,7 @@ def main() -> int:
     url = f"http://{HOST}:{port}"
 
     print(f"[JARVIS] Starting local server on {url} ...")
+    env = dict(os.environ, JARVIS_SYSTEM_CONTROL="1")
     proc = subprocess.Popen(
         [
             sys.executable, "-m", "streamlit", "run", APP,
@@ -61,6 +62,7 @@ def main() -> int:
             "--browser.gatherUsageStats", "false",
         ],
         cwd=HERE,
+        env=env,
     )
 
     try:

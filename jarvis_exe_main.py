@@ -41,6 +41,9 @@ def main() -> int:
         print("[JARVIS] app.py not found next to executable.")
         return 1
 
+    # This is the user's own machine, so the PC-control tools are available.
+    os.environ.setdefault("JARVIS_SYSTEM_CONTROL", "1")
+
     port = pick_port()
     url = f"http://{HOST}:{port}"
     no_gui = os.environ.get("JARVIS_NO_GUI") == "1"

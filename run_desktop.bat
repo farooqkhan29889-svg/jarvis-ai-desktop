@@ -5,6 +5,8 @@ cd /d "%~dp0"
 setlocal
 
 set "VPY=.venv\Scripts\python.exe"
+REM  Local PC: JARVIS may open apps, websites and files for you.
+set "JARVIS_SYSTEM_CONTROL=1"
 
 if not exist "%VPY%" (
     echo [JARVIS] Setting up for the first time on this PC...

@@ -8,6 +8,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 datas = [
     ("app.py", "."),
     ("agent.py", "."),
+    ("system_control.py", "."),
     ("assets", "assets"),
 ]
 binaries = []

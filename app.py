@@ -15,7 +15,15 @@ import streamlit.components.v1 as components
 from langchain_core.messages import AIMessage, HumanMessage
 from streamlit_mic_recorder import mic_recorder
 
-from agent import DEFAULT_MODEL, build_agent, list_chat_models, run_agent, transcribe_audio
+from agent import (
+    DEFAULT_MODEL,
+    build_agent,
+    list_chat_models,
+    pick_default_model,
+    run_agent,
+    transcribe_audio,
+)
+from system_control import system_control_enabled
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "jarvis_icon_256.png")
 
@@ -34,8 +42,12 @@ st.set_page_config(
 # Fallback list; the sidebar refreshes this live from your Groq account.
 MODELS = [
     DEFAULT_MODEL,
+    "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
 ]
+
+# PC control only exists on the local desktop build, never on a hosted deploy.
+PC_CONTROL_AVAILABLE = system_control_enabled()
 
 # Voice presets -> (preferred browser voice names, rate, pitch)
 VOICE_PRESETS = {
@@ -162,6 +174,8 @@ def init_state() -> None:
         "api_key": _load_key_from_env(),
         "model": DEFAULT_MODEL,
         "models": None,
+        "pc_control": PC_CONTROL_AVAILABLE,
+        "pc_control_applied": False,
         "ready": False,
         "tts_enabled": True,
         "voice_preset": "British (JARVIS)",
@@ -175,9 +189,11 @@ def init_state() -> None:
 
 
 def make_executor(api_key: str, model: str):
-    st.session_state.executor = build_agent(api_key, model)
+    pc = bool(PC_CONTROL_AVAILABLE and st.session_state.pc_control)
+    st.session_state.executor = build_agent(api_key, model, pc_control=pc)
     st.session_state.api_key = api_key
     st.session_state.model = model
+    st.session_state.pc_control_applied = pc
     st.session_state.ready = True
 
 
@@ -374,7 +390,7 @@ init_state()
 with st.sidebar:
     if os.path.exists(ICON_PATH):
         st.image(ICON_PATH, width=72)
-    st.markdown('<div class="side-title">◉ SYSTEM CONTROL</div>', unsafe_allow_html=True)
+    st.markdown('<div class="side-title">◉ CORE SYSTEM</div>', unsafe_allow_html=True)
     st.markdown("---")
 
     key = st.session_state.api_key
@@ -406,15 +422,32 @@ with st.sidebar:
                 st.session_state.models = list_chat_models(st.session_state.api_key)
         except Exception:  # noqa: BLE001
             st.session_state.models = list(MODELS)
+        if st.session_state.model not in st.session_state.models:
+            st.session_state.model = pick_default_model(st.session_state.models)
 
     model_choices = st.session_state.models or list(MODELS)
-    if DEFAULT_MODEL not in model_choices:
-        model_choices = [DEFAULT_MODEL] + model_choices
     model_val = st.selectbox(
         "Model", model_choices,
         index=model_choices.index(st.session_state.model) if st.session_state.model in model_choices else 0,
         help="Live list of models your Groq key can access.",
     )
+
+    if PC_CONTROL_AVAILABLE:
+        st.session_state.pc_control = st.toggle(
+            "🖥 Control this PC", value=st.session_state.pc_control,
+            help="Lets JARVIS open websites and apps, WhatsApp, and read/write "
+                 "files in your own folders. Only available in the local desktop app.",
+        )
+        if st.session_state.pc_control:
+            st.caption("JARVIS can open apps, websites and files on this computer.")
+        if st.session_state.ready and st.session_state.pc_control != st.session_state.pc_control_applied:
+            try:
+                make_executor(st.session_state.api_key.strip(), st.session_state.model)
+                st.toast("PC control re-armed.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Re-arm failed: {exc}")
+    elif os.environ.get("JARVIS_SYSTEM_CONTROL") != "1":
+        st.caption("🖥 PC control is off — run the desktop app or `run.bat` to enable it.")
 
     if st.button("⏻ INITIALIZE JARVIS", use_container_width=True):
         if not st.session_state.api_key.strip():
@@ -432,6 +465,8 @@ with st.sidebar:
     if st.session_state.ready:
         st.markdown('STATUS: <span class="status-on">● ONLINE</span>', unsafe_allow_html=True)
         st.caption(f"Model: {st.session_state.model}")
+        if st.session_state.pc_control:
+            st.caption("🖥 PC control: armed")
     else:
         st.markdown('STATUS: <span class="status-off">● OFFLINE</span>', unsafe_allow_html=True)
 
@@ -481,8 +516,12 @@ with st.sidebar:
         st.session_state.pending_voice = None
         st.rerun()
 
+    pc_line = (
+        "\n\n**PC control:** apps · websites · WhatsApp · files & folders"
+        if (PC_CONTROL_AVAILABLE and st.session_state.pc_control) else ""
+    )
     st.caption(
-        "**Tools:** web search · Wikipedia · calculator · date/time · voice\n\n"
+        "**Tools:** web search · Wikipedia · calculator · date/time · voice" + pc_line + "\n\n"
         "Type or speak a task: research, calculate, summarise, plan, write, explain."
     )
 
