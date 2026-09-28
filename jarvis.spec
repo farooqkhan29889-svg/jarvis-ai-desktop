@@ -10,6 +10,7 @@ datas = [
     ("agent.py", "."),
     ("system_control.py", "."),
     ("followups.py", "."),
+    ("memory.py", "."),
     ("email_control.py", "."),
     ("wakeword.py", "."),
     ("wake_listener.ps1", "."),

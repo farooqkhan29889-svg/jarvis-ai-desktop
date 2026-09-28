@@ -141,7 +141,9 @@ def wikipedia_lookup(query: str) -> str:
 
 
 def get_tools(pc_control: bool = False, reminders: bool = False, email_cfg=None) -> list:
-    tools = [calculator, current_datetime, web_search, wikipedia_lookup]
+    from memory import MEMORY_TOOLS
+
+    tools = [calculator, current_datetime, web_search, wikipedia_lookup] + MEMORY_TOOLS
     if reminders:
         from followups import REMINDER_TOOLS
 
@@ -165,6 +167,7 @@ def build_agent(api_key: str, model: str = DEFAULT_MODEL, pc_control: bool = Fal
                 reminders: bool = True, email_cfg=None) -> AgentExecutor:
     """Create a ready-to-run AgentExecutor for the given Groq API key."""
     from followups import REMINDER_NOTES
+    from memory import MEMORY_NOTES, memory_context
     from system_control import PC_CONTROL_NOTES
 
     llm = ChatGroq(
@@ -175,6 +178,11 @@ def build_agent(api_key: str, model: str = DEFAULT_MODEL, pc_control: bool = Fal
     )
 
     system_prompt = SYSTEM_PROMPT
+    system_prompt += (
+        "\n\nUSER MEMORY - durable facts you have saved about the user "
+        "(newest first):\n" + memory_context()
+    )
+    system_prompt += MEMORY_NOTES
     if pc_control:
         system_prompt += PC_CONTROL_NOTES
     if reminders:

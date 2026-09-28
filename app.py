@@ -28,6 +28,7 @@ from agent import (
 from email_control import EmailConfig, from_env, test_connection
 from followups import list_upcoming, pop_due, start_scheduler
 from system_control import system_control_enabled
+import memory
 import wakeword
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "jarvis_icon_256.png")
@@ -208,6 +209,7 @@ def init_state() -> None:
         "tts_enabled": True,
         "voice_preset": "British (JARVIS)",
         "always_on_note": "",
+        "mem_fingerprint": "",
         "last_audio_hash": None,
         "pending_voice": None,
         "replay": False,
@@ -373,6 +375,15 @@ def run_and_render(prompt: str) -> None:
             "add_followup", "complete_followup", "remove_followup"}:
         st.rerun()
 
+    # A turn that changed memory: rebuild the agent so its system prompt carries
+    # the fresh digest, then rerun so the sidebar list is current.
+    new_fp = memory.fingerprint()
+    if new_fp != st.session_state.mem_fingerprint:
+        st.session_state.mem_fingerprint = new_fp
+        if st.session_state.ready:
+            make_executor(st.session_state.api_key.strip(), st.session_state.model)
+        st.rerun()
+
 
 init_state()
 
@@ -460,6 +471,32 @@ with st.sidebar:
         st.caption(f"{len(upcoming)} open follow-up(s). Ask JARVIS to list or close them.")
     else:
         st.caption("No follow-ups scheduled. Say *remind me to call Ali at 6*.")
+
+    # ---- Memory ----
+    mem_items = memory.memories()
+    if mem_items:
+        for m in mem_items[:4]:
+            st.caption(f"🧠 {m.get('text', '')[:70]}")
+        with st.popover(f"🧠 Memory ({len(mem_items)})", use_container_width=True):
+            st.caption("Facts JARVIS keeps saved. Ask it to forget one, or clear here.")
+            for m in mem_items:
+                col1, col2 = st.columns([6, 1])
+                col1.caption(f"`{m['id']}` · {m.get('text', '')[:90]}")
+                if col2.button("✖", key=f"forget_{m['id']}", help="Forget this fact"):
+                    memory.forget_memory(m["id"])
+                    st.session_state.mem_fingerprint = memory.fingerprint()
+                    if st.session_state.ready:
+                        make_executor(st.session_state.api_key.strip(), st.session_state.model)
+                    st.rerun()
+            if st.button("Forget everything", use_container_width=True):
+                memory.clear_memory()
+                st.session_state.mem_fingerprint = memory.fingerprint()
+                if st.session_state.ready:
+                    make_executor(st.session_state.api_key.strip(), st.session_state.model)
+                st.rerun()
+    else:
+        st.caption("No memories yet. Say *JARVIS, save this: …* — I also remember "
+                   "important things on my own.")
 
     # ---- Email (read-only) ----
     cfg = st.session_state.email_cfg
@@ -574,6 +611,7 @@ with st.sidebar:
         lines.append("\n\n**PC control:** apps · websites · WhatsApp · files & folders")
     if st.session_state.reminders_on:
         lines.append("\n\n**Follow-ups:** add · list · complete · remove (saved on disk)")
+    lines.append("\n\n**Memory:** say “save this” — I keep it and remember it next time")
     if st.session_state.email_cfg.ready:
         lines.append("\n\n**Mailbox:** read-only inbox check")
     if wakeword.is_on():

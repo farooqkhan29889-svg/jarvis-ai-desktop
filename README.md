@@ -23,6 +23,7 @@ JARVIS is a tool-calling agent. It decides on its own when to use:
 | **Voice replies** 🔊 | JARVIS speaks its answers (British accent) via your browser |
 | **PC control** 🖥 | *Local desktop only* — open apps, websites, WhatsApp, and read/write files |
 | **Follow-up reminders** ⏰ | Saved list of tasks with due times; alerts you when one is due |
+| **Memory** 🧠 | Say *"save this"* and JARVIS keeps it forever — it also remembers important facts on its own |
 | **Email check** ✉️ | *Read-only* inbox — newest messages and unread count over IMAP |
 
 ### PC control (local `.exe` / `run.bat` / `run_desktop.bat` only)
@@ -67,6 +68,25 @@ read aloud. The sidebar shows the queue with 🔴 for overdue and 🟡 for pendi
 
 - Saved in `~/.jarvis/followups.json` (override the folder with env `JARVIS_HOME`).
 - Turn the whole feature off with the **⏰ Follow-up reminders** sidebar toggle.
+
+### Memory 🧠
+
+JARVIS has a persistent memory that survives restarts, rebuilds and moving to
+another PC (it lives in your `~/.jarvis` folder):
+
+- **Tell it to save:** *"JARVIS, save this: my clinic is open 9 to 5 except
+  Thursday"* — it writes the fact down in full detail and confirms.
+- **It also saves on its own.** When you mention something durable — your name,
+  job, preferences, plans, deadlines, people, places — JARVIS quietly stores the
+  important bits without being asked, so no note-taking is needed.
+- **It remembers across sessions.** Saved facts are loaded into JARVIS's mind at
+  boot, so next week it still knows your clinic hours.
+- **Ask it:** *"what do you remember about me?"* · *"forget the thing about the
+  clinic"* — `save_memory` · `list_memories` · `forget_memory`.
+- The sidebar lists recent memories; **🧠 Memory** popover lets you drop one or
+  wipe all of them by hand.
+- **Secrets are refused.** JARVIS is explicitly told never to store passwords,
+  API keys, card numbers or anything sensitive in memory.
 
 ### Email check ✉️ (strictly read-only)
 
@@ -199,6 +219,7 @@ The app opens at `http://localhost:8501`.
 - 🖥 "Save these notes to Documents/clinic-notes.md."
 - ⏰ "Remind me to follow up with the lab tomorrow at 10." / "What follow-ups are open?"
 - ⏰ "Mark the lab one done." / "Remind me to check the register in 30 minutes."
+- 🧠 "Save this: Dr. Sharma prefers evening appointments." / "What do you remember about me?"
 - ✉️ "Any new emails?" / "How many unread messages do I have?" / "Check for mail from Ali."
 - 🗣 With **Always listen** on: say **"Hello JARVIS"**, then *"what is the date today?"* —
   from the desktop, the kitchen, or with JARVIS's window never opened.
@@ -223,6 +244,7 @@ jarvice-ai-dekstop/
 ├── agent.py          # LangChain + Groq agent, tools, and Whisper transcription
 ├── system_control.py # sandboxed PC tools (apps, websites, WhatsApp, files)
 ├── followups.py      # reminder store, due-time parser and background watcher
+├── memory.py         # persistent memory: facts JARVIS saves (asked or on its own)
 ├── email_control.py  # read-only IMAP inbox tools
 ├── wakeword.py       # starts/stops the native "Hello JARVIS" listener + Startup entry
 ├── wake_listener.ps1 # offline Windows speech listener (wake word -> command file)
@@ -267,8 +289,9 @@ jarvice-ai-dekstop/
   Windows not to *sleep* (the display still switches off as usual).
 - **Where is my wake-word state kept?** `~/.jarvis/` — `wake_config.json` (your
   wish + where JARVIS lives), `wake_status.json` (live listener status),
-  `wake_command.json` (the last dictated command), `wake_listener.log`. Delete the
-  folder to reset; the Startup shortcut is
+  `wake_command.json` (the last dictated command), `wake_listener.log`. Memories
+  live in `memory.json` and follow-ups in `followups.json` in the same folder.
+  Delete the folder to reset; the Startup shortcut is
   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JARVIS.lnk`.
 - **Want a true installable desktop app (window, icon)?** Next step is wrapping
   this in PyWebView or porting the UI to Electron/Tauri — say the word.
