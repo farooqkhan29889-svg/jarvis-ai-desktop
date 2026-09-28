@@ -10,8 +10,10 @@ import hashlib
 import json
 import os
 import socket
+import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -227,7 +229,20 @@ def _load_key_from_env() -> str:
     try:
         from dotenv import load_dotenv
 
-        load_dotenv()
+        # CWD first (dev run), then next to the frozen exe and its parents so a
+        # double-clicked JARVIS.exe finds .env no matter where it was started.
+        candidates = [Path.cwd()]
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            for level in (exe_dir, exe_dir.parent, exe_dir.parent.parent):
+                candidates.append(level)
+        for folder in candidates:
+            env_file = folder / ".env"
+            if env_file.exists():
+                load_dotenv(env_file)
+                break
+        else:
+            load_dotenv()
     except Exception:  # noqa: BLE001
         pass
     key = os.getenv("GROQ_API_KEY", "")

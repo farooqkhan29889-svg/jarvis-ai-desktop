@@ -275,6 +275,7 @@ jarvice-ai-dekstop/
 ├── .env.example
 ├── run.bat           # launch in browser
 ├── run_desktop.bat   # launch as desktop app window
+├── install_desktop.bat  # Desktop + Start Menu shortcuts for the packaged app
 ├── run.sh            # launcher for macOS/Linux (browser)
 └── .venv/            # virtual environment (created on first run)
 ```
@@ -357,6 +358,13 @@ Notes:
   frozen app because it installs signal handlers).
 - For a silent build with no console window, set `console=False` in `jarvis.spec`.
 - Set env `JARVIS_NO_GUI=1` to force browser mode (useful for debugging).
+
+### Install it like a normal app
+
+After the build finishes, double-click **`install_desktop.bat`**. It drops a
+**J.A.R.V.I.S.** shortcut on your Desktop and in the Start Menu — both with the
+arc-reactor icon — pointing at `dist\JARVIS\JARVIS.exe`. No admin rights needed.
+JARVIS stays inside this folder, so keep the folder wherever you installed it.
 
 ---
 
