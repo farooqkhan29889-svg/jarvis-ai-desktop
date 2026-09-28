@@ -48,6 +48,28 @@ Guarantees baked in:
   are only armed when `JARVIS_SYSTEM_CONTROL=1` (set by the local launchers) or in
   the packaged `.exe`. Toggle **🖥 Control this PC** in the sidebar to disable it.
 
+### Control the laptop from your phone 📱
+
+The desktop app (`.exe` / `run_desktop.bat`) makes JARVIS reachable over your
+home Wi-Fi:
+
+1. Open **📱 Control from your phone** in the sidebar — it shows a link and a
+   **QR code**.
+2. Point your phone's camera at the QR (or type the link) — the full JARVIS
+   chat opens on the phone.
+3. Type a command like *"open Notepad"* or *"what's on my Desktop?"* — JARVIS
+   runs on the laptop and **carries it out on the laptop**, and replies appear
+   on the phone (and are spoken there).
+
+Notes:
+- Phone and laptop must be on the **same Wi-Fi**.
+- First launch, Windows may ask to allow JARVIS through the firewall — choose
+  **Allow on private networks**, otherwise the phone cannot connect.
+- **Anyone on your Wi-Fi can open the page**, so keep it on trusted networks.
+- Typing works everywhere; the phone's **mic needs HTTPS**, so voice input on
+  the phone isn't available over plain Wi-Fi (type instead).
+- The wake word and the sidebar toggles behave the same as on the laptop.
+
 The interface is a glowing cyan HUD with an animated arc reactor.
 
 ### Follow-up reminders ⏰

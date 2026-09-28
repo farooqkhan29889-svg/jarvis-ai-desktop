@@ -20,6 +20,9 @@ import time
 import webbrowser
 
 HOST = "127.0.0.1"
+# Bind the server to all interfaces so a phone on the same Wi-Fi can reach
+# JARVIS and drive the PC-control tools; the native window uses localhost.
+BIND = "0.0.0.0"
 
 
 def base_path() -> str:
@@ -52,7 +55,7 @@ def main() -> int:
 
     st_config.set_option("server.headless", True)
     st_config.set_option("server.port", port)
-    st_config.set_option("server.address", HOST)
+    st_config.set_option("server.address", BIND)
     st_config.set_option("browser.gatherUsageStats", False)
     st_config.set_option("global.developmentMode", False)
 

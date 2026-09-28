@@ -85,6 +85,7 @@ for pkg in [
     "langchain_classic",
     "langchain_groq",
     "groq",
+    "qrcode",
 ]:
     d, b, h = collect_all(pkg)
     datas += d

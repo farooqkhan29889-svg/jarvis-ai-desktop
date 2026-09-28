@@ -20,6 +20,10 @@ import webview
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(HERE, "app.py")
 HOST = "127.0.0.1"
+# The server also binds to all interfaces so a phone on the same Wi-Fi can
+# reach JARVIS and drive the PC-control tools. The window itself still uses
+# localhost.
+BIND = "0.0.0.0"
 
 
 def _port_free(port: int) -> bool:
@@ -58,7 +62,7 @@ def main() -> int:
             sys.executable, "-m", "streamlit", "run", APP,
             "--server.headless", "true",
             "--server.port", str(port),
-            "--server.address", HOST,
+            "--server.address", BIND,
             "--browser.gatherUsageStats", "false",
         ],
         cwd=HERE,

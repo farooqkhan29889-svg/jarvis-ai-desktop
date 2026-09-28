@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import time
 from datetime import datetime
 
@@ -176,6 +177,52 @@ section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color: #9f
 # --------------------------------------------------------------------------- #
 # State helpers
 # --------------------------------------------------------------------------- #
+def _lan_ip() -> str:
+    """The laptop's IPv4 address a phone on the same Wi-Fi can reach."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))  # no traffic sent; just picks the default route
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith(("127.", "169.254", "0.")):
+                return ip
+        finally:
+            s.close()
+    except OSError:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith(("127.", "169.254", "0.")):
+            return ip
+    except OSError:
+        pass
+    return ""
+
+
+def _phone_url() -> str:
+    ip = _lan_ip()
+    if not ip:
+        return ""
+    try:
+        port = st.get_option("server.port") or 8501
+    except Exception:  # noqa: BLE001
+        port = 8501
+    return f"http://{ip}:{port}"
+
+
+def _qr_png(url: str) -> bytes | None:
+    try:
+        import io
+
+        import qrcode
+
+        buf = io.BytesIO()
+        qrcode.make(url, box_size=6, border=2).save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _load_key_from_env() -> str:
     try:
         from dotenv import load_dotenv
@@ -450,6 +497,19 @@ with st.sidebar:
         )
         if st.session_state.pc_control:
             st.caption("JARVIS can open apps, websites and files on this computer.")
+
+        # ---- Phone remote (desktop builds only) ----
+        phone_url = _phone_url()
+        if phone_url:
+            with st.expander("📱 Control from your phone", expanded=False):
+                st.caption(f"On the same Wi-Fi, open **{phone_url}** on your phone — "
+                           "full JARVIS chat, and it can drive this PC.")
+                qr = _qr_png(phone_url)
+                if qr:
+                    st.image(qr, width=190)
+                st.caption("Anyone on your Wi-Fi can open this page. If the phone "
+                           "won't connect, allow JARVIS through the Windows firewall "
+                           "(private networks).")
     elif os.environ.get("JARVIS_SYSTEM_CONTROL") != "1":
         st.caption("🖥 PC control is off — run the desktop app or `run.bat` to enable it.")
 

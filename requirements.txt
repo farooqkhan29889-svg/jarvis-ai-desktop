@@ -9,3 +9,4 @@ duckduckgo-search>=6.1
 wikipedia>=1.4
 python-dotenv>=1.0
 pywebview>=5.1
+qrcode[pil]>=8.0
