@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -58,19 +59,29 @@ MODELS = [
 # PC control only exists on the local desktop build, never on a hosted deploy.
 PC_CONTROL_AVAILABLE = system_control_enabled()
 
-# Voice presets -> (preferred browser voice names, rate, pitch)
+# Voice presets -> (preferred browser voice names, rate, pitch, lang prefix)
 VOICE_PRESETS = {
+    "JARVIS (Avengers)": (
+        ["Google UK English Male", "Daniel", "Microsoft George", "Microsoft Ryan", "UK English Male"],
+        0.94, 0.7, "en-gb",
+    ),
     "British (JARVIS)": (
         ["Google UK English Male", "Daniel", "Microsoft George", "Microsoft Ryan", "UK English Male"],
-        1.0, 0.85,
+        1.0, 0.85, "en-gb",
     ),
     "British (female)": (
         ["Google UK English Female", "Kate", "Microsoft Sonia", "Microsoft Hazel"],
-        1.0, 1.0,
+        1.0, 1.0, "en-gb",
     ),
-    "US (male)": (["Google US English", "Alex", "Microsoft David", "Microsoft Mark"], 1.0, 0.9),
-    "System default": ([], 1.0, 1.0),
+    "Hindi (हिन्दी)": (
+        ["Google हिन्दी", "Microsoft Heera", "Microsoft Kalpana", "Hindi"],
+        1.0, 1.0, "hi",
+    ),
+    "US (male)": (["Google US English", "Alex", "Microsoft David", "Microsoft Mark"], 1.0, 0.9, "en"),
+    "System default": ([], 1.0, 1.0, "en"),
 }
+
+_HINDI_TEXT = re.compile("[\u0900-\u097f]")
 
 # --------------------------------------------------------------------------- #
 # Styling - the JARVIS HUD look
@@ -225,6 +236,153 @@ def _qr_png(url: str) -> bytes | None:
         return None
 
 
+_PHONE_WAKE_LANGS = {"Hindi": "hi-IN", "English": "en-IN"}
+
+
+def _phone_wake_component(lang_label: str) -> str:
+    """Always-on wake word inside the browser (used from the phone).
+
+    Continuous SpeechRecognition listens for "Hello JARVIS" (English or
+    Devanagari), answers "Yes, Sir?" aloud, then sends the next utterance as a
+    chat command. Returns the captured command text, or None/'' when idle.
+    """
+    preset = VOICE_PRESETS.get(
+        st.session_state.voice_preset, VOICE_PRESETS["JARVIS (Avengers)"]
+    )
+    voice_names, rate, pitch, _ = preset
+    cfg = {
+        "lang": _PHONE_WAKE_LANGS.get(lang_label, "hi-IN"),
+        "voiceNames": voice_names,
+        "rate": rate,
+        "pitch": pitch,
+    }
+    html = r"""
+<style>
+.jw-bar{font-family:'Segoe UI',system-ui,sans-serif;font-size:12px;color:#8fdcf2;
+  background:#071019;border:1px solid rgba(55,230,255,.25);border-radius:8px;
+  padding:6px 10px;height:100%;box-sizing:border-box;overflow:hidden;white-space:nowrap;}
+.jw-bar .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:#2f9c4a;margin-right:6px;vertical-align:1px;box-shadow:0 0 6px #2f9c4a;}
+.jw-bar.err{color:#ff9d9d;border-color:rgba(255,90,90,.4);}
+.jw-bar.err .dot{background:#d04545;box-shadow:0 0 6px #d04545;}
+.jw-bar.armed{color:#ffe9a8;border-color:rgba(255,220,120,.4);}
+.jw-bar.armed .dot{background:#f2b23e;box-shadow:0 0 6px #f2b23e;}
+</style>
+<div id="jw-status" class="jw-bar"><span class="dot"></span><span id="jw-label">Starting…</span></div>
+<script>
+(function(){
+  const cfg = __CFG__;
+  const bar = document.getElementById('jw-status');
+  const label = document.getElementById('jw-label');
+  function setStatus(cls, txt){ bar.className = 'jw-bar' + (cls ? ' ' + cls : ''); label.textContent = txt; }
+
+  if(window.__jw){
+    window.__jw.setLang(cfg.lang);
+    return;
+  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){
+    setStatus('err', '🔴 This browser has no speech recognition — the 🎙 Record button still works.');
+    return;
+  }
+  let armed = false, rec = null, alive = true, wakeLock = null;
+  const WAKE_RE = /(^|[\s,.])((hey|hello|okay|ok)\s+)?(jar+vis|जार्विस|जारविस)/i;
+
+  function send(cmd){
+    try{
+      const w = window.parent, d = w.document;
+      const ta = d.querySelector('[data-testid="stChatInputTextArea"]');
+      if(!ta){ setStatus('err', '🔴 Chat box not found on the page.'); return; }
+      const setter = Object.getOwnPropertyDescriptor(w.HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(ta, cmd);
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+      setStatus('on', '✅ Command sent: ' + cmd.slice(0, 40));
+    }catch(e){
+      setStatus('err', '🔴 Could not send the command: ' + e.message);
+    }
+  }
+  function say(t){
+    if(!('speechSynthesis' in window)) return;
+    try { window.speechSynthesis.cancel(); } catch(e){}
+    const u = new SpeechSynthesisUtterance(t);
+    const voices = window.speechSynthesis.getVoices();
+    for(const n of cfg.voiceNames){
+      const v = voices.find(x => x.name === n) || voices.find(x => x.name && x.name.includes(n));
+      if(v){ u.voice = v; break; }
+    }
+    u.rate = cfg.rate; u.pitch = cfg.pitch;
+    window.speechSynthesis.speak(u);
+  }
+  function detectWake(raw, isFinal){
+    const t = (raw || '').toLowerCase();
+    const m = t.match(WAKE_RE);
+    if(!m) return false;
+    armed = true;
+    setStatus('armed', '🔵 Yes, Sir? — say your command…');
+    say('Yes, Sir?');
+    if(isFinal){
+      const rest = t.slice(m.index + m[0].length).replace(/^[\s,.]+/, '');
+      if(rest.length > 3){ armed = false; send(rest); }
+    }
+    return true;
+  }
+  function handleFinal(t){
+    if(detectWake(t, true)) return;
+    if(armed){
+      const cmd = t.trim();
+      if(cmd.length > 2){ armed = false; send(cmd); }
+    }
+  }
+  function holdScreen(){
+    try{
+      if(navigator.wakeLock && document.visibilityState === 'visible'){
+        navigator.wakeLock.request('screen').then(function(l){ wakeLock = l; }).catch(function(){});
+      }
+    }catch(e){}
+  }
+  function start(){
+    if(!alive) return;
+    try{
+      rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = cfg.lang;
+      rec.onstart = function(){ setStatus('on', '🟢 Listening — say “Hello JARVIS”'); holdScreen(); };
+      rec.onerror = function(e){
+        if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+          alive = false;
+          setStatus('err', '🔴 Mic blocked — allow the microphone for this page.');
+          return;
+        }
+        // no-speech / aborted / network errors: onend restarts us.
+      };
+      rec.onresult = function(ev){
+        for(let i = ev.resultIndex; i < ev.results.length; i++){
+          const r = ev.results[i], txt = r[0].transcript || '';
+          if(r.isFinal){ handleFinal(txt); }
+          else { detectWake(txt, false); }
+        }
+      };
+      rec.onend = function(){ if(alive){ setTimeout(start, 300); } };
+      rec.start();
+    }catch(e){
+      setStatus('err', '🔴 Could not start the microphone: ' + e.message);
+    }
+  }
+  document.addEventListener('visibilitychange', holdScreen);
+  window.__jw = {
+    setLang: function(l){ cfg.lang = l; },
+    test: function(t){ handleFinal(t); },
+  };
+  setStatus('on', '🟢 Listening — say “Hello JARVIS”');
+  start();
+})();
+</script>
+"""
+    return components.html(html.replace("__CFG__", json.dumps(cfg)), height=56)
+
+
 def _load_key_from_env() -> str:
     try:
         from dotenv import load_dotenv
@@ -269,7 +427,10 @@ def init_state() -> None:
         "email_note": "",
         "ready": False,
         "tts_enabled": True,
-        "voice_preset": "British (JARVIS)",
+        "voice_preset": "JARVIS (Avengers)",
+        "voice_lang": "Auto",
+        "phone_wake_on": False,
+        "phone_wake_lang": "Hindi",
         "always_on_note": "",
         "mem_fingerprint": "",
         "last_audio_hash": None,
@@ -303,17 +464,25 @@ def make_executor(api_key: str, model: str):
 
 
 def speak(text: str) -> None:
-    """Speak text in the browser using a JARVIS-like voice (Web Speech API)."""
+    """Speak text in the browser using a JARVIS-like voice (Web Speech API).
+
+    Replies written in Hindi (Devanagari) automatically switch to a Hindi
+    voice, whatever preset is selected.
+    """
     if not text:
         return
-    names, rate, pitch = VOICE_PRESETS.get(
-        st.session_state.voice_preset, VOICE_PRESETS["British (JARVIS)"]
+    preset = VOICE_PRESETS.get(
+        st.session_state.voice_preset, VOICE_PRESETS["JARVIS (Avengers)"]
     )
+    names, rate, pitch, lang = preset
+    if _HINDI_TEXT.search(text) and lang != "hi":
+        names, rate, pitch, lang = VOICE_PRESETS["Hindi (हिन्दी)"]
     payload = {
         "text": text,
         "names": names,
         "rate": rate,
         "pitch": pitch,
+        "lang": lang,
     }
     js = """
 <script>
@@ -325,7 +494,7 @@ def speak(text: str) -> None:
       const v = voices.find(x => x.name === n) || voices.find(x => x.name && x.name.includes(n));
       if(v) return v;
     }
-    return voices.find(x => (x.lang||'').toLowerCase().startsWith('en-gb'))
+    return voices.find(x => (x.lang||'').toLowerCase().startsWith(cfg.lang))
         || voices.find(x => (x.lang||'').toLowerCase().startsWith('en'))
         || null;
   }
@@ -525,6 +694,23 @@ with st.sidebar:
                 st.caption("Anyone on your Wi-Fi can open this page. If the phone "
                            "won't connect, allow JARVIS through the Windows firewall "
                            "(private networks).")
+        st.markdown("---")
+        st.session_state.phone_wake_on = st.toggle(
+            "🎙 Always listen on this device",
+            value=st.session_state.phone_wake_on,
+            help="Say “Hello JARVIS” and it answers without pressing Record. "
+                 "Turn this on from the phone itself; keep the page open with "
+                 "the screen on. Works best in Chrome.",
+        )
+        if st.session_state.phone_wake_on:
+            st.session_state.phone_wake_lang = st.selectbox(
+                "Command language",
+                list(_PHONE_WAKE_LANGS),
+                index=list(_PHONE_WAKE_LANGS).index(st.session_state.phone_wake_lang)
+                if st.session_state.phone_wake_lang in _PHONE_WAKE_LANGS else 0,
+                help="The language your spoken commands will be recognised in.",
+            )
+            _phone_wake_component(st.session_state.phone_wake_lang)
     elif os.environ.get("JARVIS_SYSTEM_CONTROL") != "1":
         st.caption("🖥 PC control is off — run the desktop app or `run.bat` to enable it.")
 
@@ -651,7 +837,15 @@ with st.sidebar:
         "Voice", preset_names,
         index=preset_names.index(st.session_state.voice_preset)
         if st.session_state.voice_preset in preset_names else 0,
-        help="Available voices depend on your OS/browser. British = classic JARVIS.",
+        help="Available voices depend on your OS/browser. 'JARVIS (Avengers)' is the "
+             "deep movie-assistant voice; Hindi replies automatically use the Hindi voice.",
+    )
+    st.session_state.voice_lang = st.selectbox(
+        "Speech language", ["Auto", "Hindi", "English"],
+        index=["Auto", "Hindi", "English"].index(st.session_state.voice_lang)
+        if st.session_state.voice_lang in ("Auto", "Hindi", "English") else 0,
+        help="Language of your spoken commands. Auto lets Whisper detect it — use "
+             "Hindi or English to force one.",
     )
 
     render_always_on()
@@ -736,7 +930,10 @@ if audio and audio.get("bytes"):
         st.session_state.last_audio_hash = digest
         try:
             with st.spinner("Transcribing…"):
-                transcript = transcribe_audio(blob, st.session_state.api_key, filename="command.wav")
+                transcript = transcribe_audio(
+                    blob, st.session_state.api_key, filename="command.wav",
+                    language={"Hindi": "hi", "English": "en"}.get(st.session_state.voice_lang),
+                )
             if transcript:
                 st.session_state.pending_voice = transcript
             else:

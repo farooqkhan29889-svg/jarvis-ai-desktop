@@ -20,7 +20,7 @@ JARVIS is a tool-calling agent. It decides on its own when to use:
 | **Date / time** | Current local date, weekday, time |
 | **Voice input** 🎙 | Record a command — transcribed by **Groq Whisper** |
 | **Wake word** 🗣 | *"Hello JARVIS"* — offline Windows listener, works with the window closed |
-| **Voice replies** 🔊 | JARVIS speaks its answers (British accent) via your browser |
+| **Voice replies** 🔊 | JARVIS speaks its answers aloud — deep **JARVIS (Avengers)** voice by default, switches to Hindi automatically |
 | **PC control** 🖥 | *Local desktop only* — open apps, websites, WhatsApp, and read/write files |
 | **Follow-up reminders** ⏰ | Saved list of tasks with due times; alerts you when one is due |
 | **Memory** 🧠 | Say *"save this"* and JARVIS keeps it forever — it also remembers important facts on its own |
@@ -60,15 +60,21 @@ home Wi-Fi:
 3. Type a command like *"open Notepad"* or *"what's on my Desktop?"* — JARVIS
    runs on the laptop and **carries it out on the laptop**, and replies appear
    on the phone (and are spoken there).
+4. For hands-free use on the phone, switch on **🎙 Always listen on this
+   device** and allow the microphone when the phone asks. The phone then
+   listens on its own: say **"Hello JARVIS"** (or "हेलो जार्विस") — it answers
+   **"Yes, Sir?"** — then speak your command. No Record button, and the phone's
+   screen stays on while it listens.
 
 Notes:
 - Phone and laptop must be on the **same Wi-Fi**.
 - First launch, Windows may ask to allow JARVIS through the firewall — choose
   **Allow on private networks**, otherwise the phone cannot connect.
 - **Anyone on your Wi-Fi can open the page**, so keep it on trusted networks.
-- Typing works everywhere; the phone's **mic needs HTTPS**, so voice input on
-  the phone isn't available over plain Wi-Fi (type instead).
-- The wake word and the sidebar toggles behave the same as on the laptop.
+- Typing works everywhere. Voice input and the always-on wake word on the phone
+  use the phone browser's speech features — the status bar under the switch
+  says clearly if that browser can't listen (then the laptop's own listener
+  still hears you from the room, and the 🎙 Record button still works).
 
 The interface is a glowing cyan HUD with an animated arc reactor.
 
@@ -132,10 +138,15 @@ Guarantees:
   [App Password](https://myaccount.google.com/apppasswords).
 
 ### Voice
-- **Input:** in the sidebar, press **🎙 Record**, speak, then **⏹ Stop**. Your
-  words are transcribed (Whisper) and sent to JARVIS automatically.
-- **Replies:** toggle **Speak replies aloud** and pick a voice. "British (JARVIS)"
-  uses an en-GB voice; available voices depend on your OS/browser.
+- **Input:** press **🎙 Record**, speak, then **⏹ Stop**. Whisper transcribes it —
+  it auto-detects the language, so Hindi works too — and JARVIS answers.
+- **Replies:** toggle **Speak replies aloud** and pick a voice. The default is
+  **JARVIS (Avengers)** — a deep, slowed British voice. Available voices depend
+  on your OS/browser.
+- **Talk in Hindi:** JARVIS answers in Hindi (Devanagari) whenever you speak or
+  write in Hindi, and the reply is read out in a Hindi voice automatically,
+  whatever voice preset is selected. If auto-detection guesses wrong, set
+  **Speech language** in the sidebar to force Hindi or English.
 - If a browser blocks auto-play audio, press **🔊 Replay last reply**.
 
 ### Always-on wake word — say "Hello JARVIS", any time

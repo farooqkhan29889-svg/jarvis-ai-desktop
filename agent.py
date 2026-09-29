@@ -45,7 +45,9 @@ SYSTEM_PROMPT = (
     "calculation, a definition, or a lookup, ALWAYS use the appropriate tool "
     "instead of guessing. Reason step by step internally, then give a clear, "
     "well-structured final answer. If a request is ambiguous, make a sensible "
-    "assumption and state it. Keep answers focused and useful."
+    "assumption and state it. Keep answers focused and useful.\n\n"
+    "Match the user's language: when the user writes or speaks in Hindi "
+    "(Devanagari), answer in Hindi (Devanagari); otherwise answer in English."
 )
 
 # --------------------------------------------------------------------------- #
@@ -271,15 +273,17 @@ def transcribe_audio(
     api_key: str,
     filename: str = "audio.wav",
     model: str = WHISPER_MODEL,
-    language: str = "en",
+    language: str | None = None,
 ) -> str:
-    """Transcribe recorded audio to text using Groq's Whisper endpoint."""
+    """Transcribe recorded audio to text using Groq's Whisper endpoint.
+
+    language: 'en' / 'hi' / ... to force one, or None to let Whisper detect it.
+    """
     from groq import Groq
 
     client = Groq(api_key=api_key)
-    result = client.audio.transcriptions.create(
-        file=(filename, audio_bytes),
-        model=model,
-        language=language,
-    )
+    params = {"file": (filename, audio_bytes), "model": model}
+    if language:
+        params["language"] = language
+    result = client.audio.transcriptions.create(**params)
     return (result.text or "").strip()
