@@ -18,9 +18,9 @@ JARVIS is a tool-calling agent. It decides on its own when to use:
 | **Wikipedia** | Summaries of people, places, concepts |
 | **Calculator** | Safe math (sqrt, trig, logs, powers…) |
 | **Date / time** | Current local date, weekday, time |
-| **Voice input** 🎙 | Record a command — transcribed by **Groq Whisper** |
+| **Voice input** 🎙 | Record a command — transcribed by **Groq Whisper** (auto-detects Hindi/English) |
 | **Wake word** 🗣 | *"Hello JARVIS"* — offline Windows listener, works with the window closed |
-| **Voice replies** 🔊 | JARVIS speaks its answers aloud — deep **JARVIS (Avengers)** voice by default, switches to Hindi automatically |
+| **Voice replies** 🔊 | JARVIS speaks its answers aloud — natural neural voice (Groq Orpheus) by default, Hindi voice for Hindi replies |
 | **PC control** 🖥 | *Local desktop only* — open apps, websites, WhatsApp, and read/write files |
 | **Follow-up reminders** ⏰ | Saved list of tasks with due times; alerts you when one is due |
 | **Memory** 🧠 | Say *"save this"* and JARVIS keeps it forever — it also remembers important facts on its own |
@@ -140,9 +140,19 @@ Guarantees:
 ### Voice
 - **Input:** press **🎙 Record**, speak, then **⏹ Stop**. Whisper transcribes it —
   it auto-detects the language, so Hindi works too — and JARVIS answers.
-- **Replies:** toggle **Speak replies aloud** and pick a voice. The default is
-  **JARVIS (Avengers)** — a deep, slowed British voice. Available voices depend
-  on your OS/browser.
+- **Replies:** toggle **Speak replies aloud** and pick a voice.
+- **Natural neural voice (default):** **Natural neural voice (Groq)** uses
+  Groq's Orpheus model — a high-quality AI voice like Siri/GPT/Gemini use,
+  spoken from your existing Groq key. Pick the voice under **Neural voice**
+  (*Daniel* is the deep British male, closest to the movie JARVIS; *Troy* and
+  *Austin* are male, *Hannah*, *Autumn*, *Diana* female). One-time setup: open
+  <https://console.groq.com/playground?model=canopylabs/orpheus-v1-english>
+  in your Groq account and accept the model terms — until then JARVIS
+  automatically falls back to the system voice (and tells you why).
+- **System voice (fallback):** the **Voice** list below the neural switch uses
+  your OS/browser's voices — the *JARVIS (Avengers)* preset is a deep, slowed
+  British voice. This is also what Hindi replies and the phone's "Yes, Sir?"
+  wake-up use.
 - **Talk in Hindi:** JARVIS answers in Hindi (Devanagari) whenever you speak or
   write in Hindi, and the reply is read out in a Hindi voice automatically,
   whatever voice preset is selected. If auto-detection guesses wrong, set

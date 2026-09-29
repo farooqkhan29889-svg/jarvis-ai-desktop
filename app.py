@@ -6,6 +6,7 @@ Run with:  streamlit run app.py
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ from agent import (
     list_chat_models,
     pick_default_model,
     run_agent,
+    synthesize_speech,
     transcribe_audio,
 )
 from email_control import EmailConfig, from_env, test_connection
@@ -82,6 +84,17 @@ VOICE_PRESETS = {
 }
 
 _HINDI_TEXT = re.compile("[\u0900-\u097f]")
+
+# Groq's neural TTS (Canopy Labs Orpheus). English only; Hindi replies keep
+# using a browser voice. Display label -> Orpheus voice id.
+NEURAL_VOICES = {
+    "Daniel — deep British male": "daniel",
+    "Troy — male": "troy",
+    "Austin — male": "austin",
+    "Hannah — female": "hannah",
+    "Autumn — female": "autumn",
+    "Diana — female": "diana",
+}
 
 # --------------------------------------------------------------------------- #
 # Styling - the JARVIS HUD look
@@ -429,6 +442,10 @@ def init_state() -> None:
         "tts_enabled": True,
         "voice_preset": "JARVIS (Avengers)",
         "voice_lang": "Auto",
+        "neural_tts": True,
+        "neural_voice": "daniel",
+        "neural_note": "",
+        "_spoken_key": None,
         "phone_wake_on": False,
         "phone_wake_lang": "Hindi",
         "always_on_note": "",
@@ -463,14 +480,56 @@ def make_executor(api_key: str, model: str):
     st.session_state.ready = True
 
 
+def _play_audio(wav_bytes: bytes) -> None:
+    """Play WAV bytes invisibly in the page."""
+    b64 = base64.b64encode(wav_bytes).decode("ascii")
+    components.html(
+        f"""<audio id="jw-tts" autoplay></audio>
+<script>
+(function(){{
+  const a = document.getElementById('jw-tts');
+  a.src = 'data:audio/wav;base64,{b64}';
+  a.play().catch(function(){{}});
+}})();
+</script>""",
+        height=0,
+    )
+
+
 def speak(text: str) -> None:
     """Speak text in the browser using a JARVIS-like voice (Web Speech API).
 
-    Replies written in Hindi (Devanagari) automatically switch to a Hindi
-    voice, whatever preset is selected.
+    English replies use Groq's neural Orpheus voice when enabled (like
+    Siri/GPT voice); replies written in Hindi (Devanagari) automatically
+    switch to a Hindi voice, whatever preset is selected.
     """
     if not text:
         return
+    api_key = st.session_state.get("api_key") or ""
+    if st.session_state.neural_tts and api_key and not _HINDI_TEXT.search(text):
+        voice = st.session_state.get("neural_voice") or "daniel"
+        spoken_key = ("neural", voice, text)
+        if spoken_key != st.session_state.get("_spoken_key"):
+            try:
+                audio = synthesize_speech(text, api_key, voice=voice)
+            except Exception as exc:  # noqa: BLE001
+                audio = b""
+                msg = str(exc)
+                if "terms" in msg.lower():
+                    st.session_state.neural_note = (
+                        "Accept the Orpheus terms once in your Groq console to "
+                        "enable it: https://console.groq.com/playground"
+                        "?model=canopylabs/orpheus-v1-english"
+                    )
+                else:
+                    st.session_state.neural_note = msg[:200]
+            if audio:
+                st.session_state._spoken_key = spoken_key
+                st.session_state.neural_note = ""
+                _play_audio(audio)
+                return
+            # Terms not accepted / no access / network: fall back to the
+            # browser voices below.
     preset = VOICE_PRESETS.get(
         st.session_state.voice_preset, VOICE_PRESETS["JARVIS (Avengers)"]
     )
@@ -830,15 +889,38 @@ with st.sidebar:
     st.markdown('<div class="side-title">🎙 VOICE</div>', unsafe_allow_html=True)
     st.session_state.tts_enabled = st.toggle(
         "Speak replies aloud", value=st.session_state.tts_enabled,
-        help="JARVIS reads its answers using your browser's speech engine.",
+        help="JARVIS reads its answers aloud.",
     )
+    st.session_state.neural_tts = st.toggle(
+        "Natural neural voice (Groq)",
+        value=st.session_state.neural_tts,
+        help="High-quality AI voice (Orpheus) for English replies — like the "
+             "Siri/GPT voice. Hindi replies use the Hindi system voice. Needs a "
+             "one-time terms acceptance in your Groq console.",
+    )
+    if st.session_state.neural_note:
+        st.caption(f"⚠️ Neural voice unavailable: {st.session_state.neural_note}")
+    if st.session_state.neural_tts:
+        neural_ids = list(NEURAL_VOICES.values())
+        st.session_state.neural_voice = st.selectbox(
+            "Neural voice",
+            neural_ids,
+            index=neural_ids.index(st.session_state.neural_voice)
+            if st.session_state.neural_voice in neural_ids else 0,
+            format_func=lambda v: next(
+                k for k, val in NEURAL_VOICES.items() if val == v
+            ),
+            help="The Orpheus voice JARVIS speaks with. Daniel is the deep "
+                 "British male — closest to the movie JARVIS.",
+        )
     preset_names = list(VOICE_PRESETS.keys())
     st.session_state.voice_preset = st.selectbox(
         "Voice", preset_names,
         index=preset_names.index(st.session_state.voice_preset)
         if st.session_state.voice_preset in preset_names else 0,
-        help="Available voices depend on your OS/browser. 'JARVIS (Avengers)' is the "
-             "deep movie-assistant voice; Hindi replies automatically use the Hindi voice.",
+        help="The system (browser) voice — used for Hindi replies, the phone's "
+             "\"Yes, Sir?\" wake-up, and as a fallback if the neural voice fails. "
+             "'JARVIS (Avengers)' is the deep movie-assistant voice.",
     )
     st.session_state.voice_lang = st.selectbox(
         "Speech language", ["Auto", "Hindi", "English"],
@@ -1000,6 +1082,7 @@ if st.session_state.replay:
     last = next((m["content"] for m in reversed(st.session_state.messages)
                  if m["role"] == "assistant"), "")
     if last:
+        st.session_state._spoken_key = None
         speak(last.split("```")[0][:1200])
 
 st.markdown(

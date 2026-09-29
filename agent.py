@@ -287,3 +287,36 @@ def transcribe_audio(
         params["language"] = language
     result = client.audio.transcriptions.create(**params)
     return (result.text or "").strip()
+
+
+ORPHEUS_MODEL = "canopylabs/orpheus-v1-english"
+
+# Vocal direction Groq documents for Orpheus; gives the voice a calm,
+# assistant-like delivery instead of a flat read.
+ORPHEUS_TONE = "[authoritatively] "
+
+
+def synthesize_speech(
+    text: str,
+    api_key: str,
+    voice: str = "daniel",
+    model: str = ORPHEUS_MODEL,
+    tone: str = ORPHEUS_TONE,
+) -> bytes:
+    """Natural neural speech (Groq Orpheus). Returns WAV bytes.
+
+    Raises if the account hasn't accepted the Orpheus terms or the key has
+    no access - callers fall back to browser speech.
+    """
+    from groq import Groq
+
+    client = Groq(api_key=api_key)
+    result = client.audio.speech.create(
+        model=model,
+        voice=voice,
+        input=(tone or "") + text.strip(),
+        response_format="wav",
+    )
+    if hasattr(result, "read"):
+        return result.read()
+    return result.content
