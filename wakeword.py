@@ -250,15 +250,24 @@ def disable() -> tuple:
 
 
 def pop_pending_command() -> str:
-    """Return the newest dictated command, or ''. Consumed on read."""
+    """Return the newest dictated command, or ''. Consumed on read.
+
+    Sessions race to consume it, so claim the file with an atomic rename
+    first; only the session whose rename wins may read the command.
+    """
     path = _command_path()
-    text = str(_read_json(path).get("text", "")).strip()
-    if not text:
+    claim = path.with_name(f"{path.name}.{os.getpid()}.{time.monotonic_ns()}.claimed")
+    try:
+        os.replace(path, claim)
+    except OSError:  # nothing queued, or another session claimed it first
         return ""
     try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        return ""
+        text = str(_read_json(claim).get("text", "")).strip()
+    finally:
+        try:
+            claim.unlink(missing_ok=True)
+        except OSError:
+            pass
     return text
 
 

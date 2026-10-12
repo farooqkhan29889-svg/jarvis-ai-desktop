@@ -209,6 +209,61 @@ def unread_count(cfg: EmailConfig) -> int:
         _logout(conn)
 
 
+def highest_uid(cfg: EmailConfig) -> int:
+    """UID of the newest INBOX message (0 when empty) - a watcher watermark."""
+    conn = _connect(cfg)
+    try:
+        status, data = conn.status("INBOX", "(UIDNEXT)")
+        if status != "OK":
+            raise RuntimeError("Could not read the mailbox.")
+        m = re.search(rb"UIDNEXT\s+(\d+)", b" ".join(data or []))
+        return max(0, int(m.group(1)) - 1) if m else 0
+    finally:
+        _logout(conn)
+
+
+def fetch_since_uid(cfg: EmailConfig, since_uid: int, limit: int = 5) -> tuple:
+    """Newest-first INBOX messages with UID > since_uid (headers only, read-only).
+
+    Returns (messages, highest_uid_seen). Note the IMAP quirk: the search range
+    'n:*' always matches at least the newest message, so results are filtered
+    in Python."""
+    conn = _connect(cfg)
+    try:
+        conn.select("INBOX", readonly=True)
+        status, data = conn.uid("search", None, f"UID {int(since_uid) + 1}:*")
+        if status != "OK":
+            raise RuntimeError("Could not read the mailbox.")
+        uids = [int(u) for u in (data[0].split() if data and data[0] else [])]
+        uids = [u for u in uids if u > since_uid]
+        if not uids:
+            return [], since_uid
+        highest = max(uids)
+        out = []
+        for uid in sorted(uids)[-limit:][::-1]:
+            status, fetched = conn.uid(
+                "fetch", str(uid), "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])"
+            )
+            if status != "OK" or not fetched:
+                continue
+            raw = next((p[1] for p in fetched if isinstance(p, tuple) and len(p) > 1), None)
+            if raw is None:
+                continue
+            msg = email_lib.message_from_bytes(raw)
+            try:
+                when = parsedate_to_datetime(msg.get("Date"))
+            except (TypeError, ValueError):
+                when = None
+            out.append({
+                "date": when.strftime("%Y-%m-%d %H:%M") if when else _decode(msg.get("Date")),
+                "from": _decode(msg.get("From")),
+                "subject": _decode(msg.get("Subject")) or "(no subject)",
+            })
+        return out, highest
+    finally:
+        _logout(conn)
+
+
 def test_connection(cfg: EmailConfig) -> str:
     """Log in and report the mailbox size - used by the UI to confirm credentials."""
     host, _port = cfg.server()

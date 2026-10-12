@@ -27,7 +27,8 @@ from agent import (
     build_agent,
     list_chat_models,
     pick_default_model,
-    run_agent,
+    quick_reply,
+    stream_agent,
     synthesize_speech,
     transcribe_audio,
 )
@@ -35,7 +36,18 @@ from email_control import EmailConfig, from_env, test_connection
 from followups import list_upcoming, pop_due, start_scheduler
 from system_control import system_control_enabled
 import memory
+import proactive
+import stop_signal
+import vision
 import wakeword
+import whatsapp_cloud
+import whatsapp_control
+
+# The Stop button and the hands-free heartbeat talk to the server over extra
+# HTTP routes; make sure they exist before anything renders. The WhatsApp Cloud
+# API webhook is registered the same way.
+stop_signal.ensure_routes()
+whatsapp_cloud.install_webhook()
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "jarvis_icon_256.png")
 
@@ -84,6 +96,11 @@ VOICE_PRESETS = {
 }
 
 _HINDI_TEXT = re.compile("[\u0900-\u097f]")
+
+# Sentence cut points for streaming speech - English/Hindi terminators.
+_SENTENCE_END = re.compile(r"(?<=[.!?।])\s+")
+# Markdown noise that would be read aloud otherwise.
+_MD_NOISE = re.compile(r"[*_`#>]+")
 
 # Groq's neural TTS (Canopy Labs Orpheus). English only; Hindi replies keep
 # using a browser voice. Display label -> Orpheus voice id.
@@ -438,6 +455,10 @@ def init_state() -> None:
         "reminders_on": True,
         "email_cfg": from_env(),
         "email_note": "",
+        "wa_note": "",
+        "wa_cloud_cfg": whatsapp_cloud.startup_config(),
+        "wa_cloud_note": "",
+        "wa_public_ok": False,
         "ready": False,
         "tts_enabled": True,
         "voice_preset": "JARVIS (Avengers)",
@@ -452,7 +473,14 @@ def init_state() -> None:
         "mem_fingerprint": "",
         "last_audio_hash": None,
         "pending_voice": None,
+        "pending_image": "",
         "replay": False,
+        "gemini_key": vision.from_env(),
+        "vision_note": "",
+        "briefing_on": bool(proactive.load_prefs().get("briefing_on", True)),
+        "briefing_hour": int(proactive.load_prefs().get("briefing_hour", 8) or 8),
+        "mail_watch_on": bool(proactive.load_prefs().get("mail_watch_on")),
+        "wa_watch_on": bool(proactive.load_prefs().get("wa_watch_on")),
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -464,16 +492,24 @@ def current_caps() -> tuple:
         bool(PC_CONTROL_AVAILABLE and st.session_state.pc_control),
         bool(st.session_state.reminders_on),
         bool(st.session_state.email_cfg.ready),
+        bool(st.session_state.wa_cloud_cfg.ready),
     )
 
 
-def make_executor(api_key: str, model: str):
-    st.session_state.executor = build_agent(
+def make_executor(api_key: str, model: str) -> None:
+    """Build the agent. State flips to ready only after a clean build, so a
+    failure leaves the previous executor (and any in-flight turn) intact."""
+    wa_cfg = st.session_state.wa_cloud_cfg
+    executor = build_agent(
         api_key, model,
         pc_control=bool(PC_CONTROL_AVAILABLE and st.session_state.pc_control),
         reminders=st.session_state.reminders_on,
         email_cfg=st.session_state.email_cfg if st.session_state.email_cfg.ready else None,
+        vision_key=(st.session_state.gemini_key or "").strip(),
+        vision_desktop=PC_CONTROL_AVAILABLE,
+        wa_cfg=wa_cfg if wa_cfg.ready else None,
     )
+    st.session_state.executor = executor
     st.session_state.api_key = api_key
     st.session_state.model = model
     st.session_state.caps_applied = current_caps()
@@ -503,6 +539,9 @@ def speak(text: str) -> None:
     Siri/GPT voice); replies written in Hindi (Devanagari) automatically
     switch to a Hindi voice, whatever preset is selected.
     """
+    if not text:
+        return
+    text = _MD_NOISE.sub("", text).strip()
     if not text:
         return
     api_key = st.session_state.get("api_key") or ""
@@ -622,47 +661,176 @@ def render_always_on() -> None:
         st.caption(st.session_state.always_on_note)
 
 
-def run_and_render(prompt: str) -> None:
-    """Handle one user turn: run the agent, render, and speak the reply."""
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar=AVATAR_USER):
-        st.markdown(prompt)
+def _cut_sentence(buf: str) -> tuple:
+    """Split the last complete sentence off a streaming buffer."""
+    matches = list(_SENTENCE_END.finditer(buf))
+    if not matches:
+        return "", buf
+    cut = matches[-1].end()
+    head, tail = buf[:cut].strip(), buf[cut:].strip()
+    return (head, tail) if head else ("", buf)
 
+
+_STOP_BUTTON_HTML = """
+<style>
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden}
+  #jb{font-size:.85rem;padding:.34rem .85rem;border-radius:.5rem;
+      border:1px solid rgba(55,230,255,.45);background:rgba(55,230,255,.08);
+      color:#37e6ff;cursor:pointer;font-family:inherit}
+  #jb:hover{background:rgba(55,230,255,.2)}
+  #jb:disabled{opacity:.5;cursor:default}
+</style>
+<button id="jb">⏹ Stop</button>
+<script>
+document.getElementById("jb").onclick = async function () {
+  const b = this; b.disabled = true; b.textContent = "⏹ Stopping…";
+  let base = "";
+  try { base = document.referrer || ""; } catch (e) {}
+  if (!base) { try { base = parent.location.href; } catch (e) { base = location.href; } }
+  const urls = [];
+  try { urls.push(new URL("__STOP_PATH__", base).href); } catch (e) {}
+  urls.push("__STOP_PATH__");
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, {cache: "no-store"});
+      if (r.ok) { b.textContent = "⏹ Stopped"; return; }
+    } catch (e) {}
+  }
+  b.textContent = "⚠ Stop failed";
+};
+</script>
+"""
+
+
+def _render_stop_button() -> None:
+    """Stop control that does not kill the running script (see stop_signal)."""
+    components.html(
+        _STOP_BUTTON_HTML.replace("__STOP_PATH__", stop_signal.STOP_ROUTE),
+        height=46,
+    )
+
+
+# Invisible. If the wake tick chain ever dies, this timer is the only thing
+# still alive on the page: it pings /_jarvis/tick and the server nudges the
+# page back to life whenever a dictated command is waiting (see stop_signal).
+_HEARTBEAT_HTML = """
+<script>
+(function () {
+  var base = "";
+  try { base = document.referrer || ""; } catch (e) {}
+  if (!base) { try { base = parent.location.href; } catch (e) { base = location.href; } }
+  var url = "__TICK_PATH__";
+  try { url = new URL("__TICK_PATH__", base).href; } catch (e) {}
+  function ping() {
+    fetch(url, {cache: "no-store"}).catch(function () {
+      try { fetch("__TICK_PATH__", {cache: "no-store"}); } catch (e) {}
+    });
+  }
+  ping();
+  setInterval(ping, 3000);
+})();
+</script>
+"""
+
+
+def _render_heartbeat() -> None:
+    components.html(
+        _HEARTBEAT_HTML.replace("__TICK_PATH__", stop_signal.TICK_ROUTE),
+        height=0,
+    )
+
+
+def run_and_render(prompt: str, image_path: str | None = None) -> None:
+    """Handle one user turn: run the agent, render, and speak the reply.
+
+    The answer streams in as the model generates it, and each completed
+    sentence is spoken straight away - JARVIS starts talking before the
+    whole answer exists, and the Stop button cuts him off mid-answer.
+    image_path: an attached image to show with the message; the agent is
+    told where the file sits so look_at_image can study it.
+    """
+    attached = image_path if image_path and os.path.exists(image_path) else None
+    entry = {"role": "user", "content": prompt}
+    if attached:
+        entry["img"] = attached
+    st.session_state.messages.append(entry)
+    with st.chat_message("user", avatar=AVATAR_USER):
+        if attached:
+            st.image(attached, width=300)
+        st.markdown(prompt)
+    agent_input = (
+        f"[The user attached an image, saved at: {attached}]\n{prompt}"
+        if attached else prompt
+    )
+
+    st.session_state.stop_talking = False
+    stop_signal.clear_stop()
+    stopped = False
     answer = ""
-    steps = []
+    tools_used = {}
     with st.chat_message("assistant", avatar=AVATAR_ASSISTANT):
+        # The Stop control must not be a Streamlit widget: any widget interaction
+        # during a run kills the script (1.64), losing the partial answer. Prefer
+        # the HTML sidecar (hits our extra route); fall back to a widget otherwise.
+        if not stop_signal.ensure_routes():
+            st.button("⏹ Stop", key="stop_talking_btn",
+                      help="Cut JARVIS off mid-answer.")
+        else:
+            _render_stop_button()
         status = st.status("Processing…", expanded=False)
         try:
-            answer, steps = run_agent(
-                st.session_state.executor, prompt, st.session_state.chat_history
-            )
-            if steps:
-                used = ", ".join(
-                    sorted({(s[0].tool if hasattr(s[0], "tool") else str(type(s[0]))) for s in steps})
+            buffer = ""
+            answer_parts = []
+
+            def gen():
+                nonlocal buffer, stopped
+                for piece in stream_agent(
+                    st.session_state.executor, agent_input,
+                    st.session_state.chat_history, tool_collector=tools_used,
+                ):
+                    if stop_signal.stop_requested() or st.session_state.stop_talking:
+                        stopped = True
+                        return
+                    buffer += piece
+                    answer_parts.append(piece)
+                    if len(buffer) > 60:
+                        head, buffer = _cut_sentence(buffer)
+                        if head and st.session_state.tts_enabled:
+                            speak(head)
+                    yield piece
+                if buffer.strip() and st.session_state.tts_enabled:
+                    speak(buffer.strip())
+
+            answer = st.write_stream(gen()).strip() or "".join(answer_parts).strip()
+            if stopped:
+                stop_signal.clear_stop()
+                status.update(label="Stopped — partial answer kept", state="complete")
+                st.caption("⏹ Stopped by you — partial answer kept.")
+            elif tools_used:
+                status.update(
+                    label=f"Used tools: {', '.join(sorted(tools_used))}",
+                    state="complete",
                 )
-                status.update(label=f"Used tools: {used}", state="complete")
             else:
                 status.update(label="Reasoned directly", state="complete")
-            st.markdown(answer or "…")
         except Exception as exc:  # noqa: BLE001
             status.update(label="Error", state="error")
             answer = f"⚠️ I hit a problem completing that: `{exc}`"
             st.markdown(answer)
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-    st.session_state.chat_history.append(HumanMessage(content=prompt))
+    if stopped and not answer:
+        answer = "⏹ Stopped before I could answer."
+    entry = {"role": "assistant", "content": answer}
+    if stopped:
+        entry["stopped"] = True
+    st.session_state.messages.append(entry)
+    st.session_state.chat_history.append(HumanMessage(content=agent_input))
     st.session_state.chat_history.append(AIMessage(content=answer))
     if len(st.session_state.chat_history) > 20:
         st.session_state.chat_history = st.session_state.chat_history[-20:]
 
-    if st.session_state.tts_enabled:
-        # Strip code fences / markdown noise for a cleaner spoken reply.
-        spoken = answer.split("```")[0][:1200]
-        speak(spoken)
-
     # A turn that changed the follow-up store: rerun so the sidebar list is current.
-    if {getattr(s[0], "tool", "") for s in steps} & {
-            "add_followup", "complete_followup", "remove_followup"}:
+    if tools_used.keys() & {"add_followup", "complete_followup", "remove_followup"}:
         st.rerun()
 
     # A turn that changed memory: rebuild the agent so its system prompt carries
@@ -676,6 +844,11 @@ def run_and_render(prompt: str) -> None:
 
 
 init_state()
+
+# The extra HTTP routes can only be attached once this process has a live
+# server, which the first run of the script may predate - so retry every rerun.
+stop_signal.ensure_routes()
+whatsapp_cloud.install_webhook()
 
 # Hands-free is meant to survive restarts: if the user switched it on once, the
 # listener comes back with the app instead of waiting for another click.
@@ -731,6 +904,21 @@ with st.sidebar:
         index=model_choices.index(st.session_state.model) if st.session_state.model in model_choices else 0,
         help="Live list of models your Groq key can access.",
     )
+
+    # A desktop install keeps its key in a local .env, so it comes online by
+    # itself at every launch - a desk assistant that needs a click after each
+    # restart cannot hear you, it only queues your voice commands. When the key
+    # comes from st.secrets instead (cloud), the app waits for the deliberate
+    # INITIALIZE click so a shared URL cannot silently spend the key.
+    if (
+        not st.session_state.ready
+        and st.session_state.api_key
+        and os.getenv("GROQ_API_KEY")
+    ):
+        try:
+            make_executor(st.session_state.api_key.strip(), model_val)
+        except Exception:  # noqa: BLE001
+            st.caption("Auto-start did not complete — press ⏻ INITIALIZE JARVIS.")
 
     if PC_CONTROL_AVAILABLE:
         st.session_state.pc_control = st.toggle(
@@ -851,6 +1039,365 @@ with st.sidebar:
             if st.session_state.email_note:
                 st.success(st.session_state.email_note)
 
+    # ---- WhatsApp (read + send by contact name, via WhatsApp Web) ----
+    wa_state = whatsapp_control.quick_status() if PC_CONTROL_AVAILABLE else "off"
+    if wa_state == "linked":
+        st.caption("💬 WhatsApp linked — JARVIS can read chats and send to any contact by name.")
+    else:
+        with st.expander("💬 Link WhatsApp (one-time QR)", expanded=False):
+            st.caption(
+                "JARVIS drives WhatsApp Web in its own small Edge window — your "
+                "normal browser and phone stay untouched. Scan the QR once and "
+                "the link lasts for weeks."
+            )
+            if st.button("Open WhatsApp login", use_container_width=True):
+                with st.spinner("Opening WhatsApp Web…"):
+                    try:
+                        st.session_state.wa_note = whatsapp_control.open_login_window()
+                    except Exception as exc:  # noqa: BLE001
+                        st.session_state.wa_note = f"Could not open it: {exc}"
+                st.rerun()
+            if st.session_state.wa_note:
+                st.info(st.session_state.wa_note)
+            if wa_state == "qr":
+                st.caption("Waiting for the scan — WhatsApp → Settings → Linked devices → Link a device.")
+
+    # ---- WhatsApp Cloud API (official Meta business channel) ----
+    cloud = st.session_state.wa_cloud_cfg
+    if cloud.ready:
+        st.caption(f"🟢 WhatsApp Cloud API — {cloud.masked()}")
+    with st.expander("🟢 Meta WhatsApp Cloud API", expanded=not cloud.ready):
+        st.caption(
+            "The official Meta channel for a **WhatsApp Business** number — no QR "
+            "scan, no browser window. JARVIS sends texts, approved templates and "
+            "broadcasts, and can answer people who message the number."
+        )
+        token_in = st.text_input(
+            "Permanent access token", value="", type="password", key="_wa_token",
+            placeholder="EAA…",
+            help="Meta Business Settings → System Users → your user → Generate "
+                 "token, with the whatsapp_business_messaging and "
+                 "business_management permissions.",
+        )
+        phone_in = st.text_input("Phone Number ID", value=cloud.phone_number_id,
+                                 key="_wa_phone", placeholder="123456789012345",
+                                 help="Meta developer console → WhatsApp → API Setup.")
+        waba_in = st.text_input("Business Account ID", value=cloud.waba_id,
+                                key="_wa_waba", placeholder="9876543210",
+                                help="Needed to list and send message templates.")
+        secret_in = st.text_input("App secret", value="", type="password",
+                                  key="_wa_secret",
+                                  help="Meta app → App settings → Basic → App "
+                                       "secret. Lets JARVIS prove an incoming "
+                                       "webhook really came from Meta.")
+        with st.popover("Advanced"):
+            verify_in = st.text_input("Webhook verify token",
+                                      value=cloud.verify_token or "jarvis-whatsapp")
+            version_in = st.text_input(
+                "Graph API version",
+                value=cloud.api_version or whatsapp_cloud.DEFAULT_API_VERSION)
+            st.caption("Usually left as they are.")
+        remember_in = st.checkbox(
+            "Remember on this PC", value=cloud.remember,
+            help="Keeps the token in your Windows user folder (~/.jarvis) — never "
+                 "in the project folder — so it is not pasted again every launch.",
+        )
+        c1, c2 = st.columns(2)
+        if c1.button("Connect & test", use_container_width=True):
+            trial = whatsapp_cloud.CloudConfig(
+                token=token_in.strip(), phone_number_id=phone_in.strip(),
+                waba_id=waba_in.strip(), app_secret=secret_in.strip(),
+                verify_token=verify_in.strip() or "jarvis-whatsapp",
+                api_version=version_in.strip() or whatsapp_cloud.DEFAULT_API_VERSION,
+                business_name=cloud.business_name, our_number=cloud.our_number,
+                remember=remember_in,
+            )
+            if not trial.token or not trial.phone_number_id:
+                st.error("Paste the access token and the Phone Number ID.")
+            else:
+                try:
+                    with st.spinner("Asking Meta…"):
+                        st.session_state.wa_cloud_note = whatsapp_cloud.test_connection(trial)
+                    whatsapp_cloud.save_config(trial)
+                    st.session_state.wa_cloud_cfg = trial
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(str(exc))
+        if cloud.ready and c2.button("Disconnect", use_container_width=True):
+            whatsapp_cloud.forget_config()
+            whatsapp_cloud.set_runtime_config(None)
+            st.session_state.wa_cloud_cfg = whatsapp_cloud.CloudConfig()
+            st.session_state.wa_cloud_note = ""
+            st.rerun()
+        if st.session_state.wa_cloud_note:
+            st.success(st.session_state.wa_cloud_note)
+
+        if cloud.ready:
+            st.markdown("**Contact book** — so JARVIS can message people by name")
+            for row in whatsapp_cloud.contacts():
+                k1, k2 = st.columns([6, 1])
+                k1.caption(f"{row.get('name')} · +{row.get('number')}")
+                if k2.button("✖", key=f"wac_{row.get('name')}_{row.get('number')}",
+                             help="Remove from the book"):
+                    whatsapp_cloud.remove_contact(str(row.get("name", "")))
+                    st.rerun()
+            n1, n2 = st.columns(2)
+            c_name = n1.text_input("Name", key="_wa_c_name", placeholder="Ali")
+            c_num = n2.text_input("Number", key="_wa_c_num", placeholder="919876543210")
+            if st.button("Save contact", use_container_width=True):
+                note = whatsapp_cloud.save_contact(c_name, c_num)
+                if note.startswith("Saved"):
+                    st.toast(note)
+                    st.rerun()
+                else:
+                    st.error(note)
+
+            st.markdown("**Incoming messages**")
+            wa_prefs = whatsapp_cloud.load_prefs()
+            public = whatsapp_cloud.public_webhook_url()
+            if public:
+                st.code(public)
+                st.caption(
+                    "Meta → WhatsApp → Configuration → Webhook: paste that as the "
+                    f"callback URL with verify token `{cloud.verify_token}`, then "
+                    "subscribe to the `messages` field."
+                )
+            else:
+                st.caption("Meta delivers messages to a public HTTPS address, so "
+                           "this PC needs a tunnel (one click below) or a host.")
+            t1, t2 = st.columns(2)
+            # A quick tunnel publishes every route on this port to the internet,
+            # not just the webhook - so it has to cost an explicit opt-in, and
+            # inbound payloads must be signed or anyone who finds the address can
+            # feed JARVIS fake messages from any number.
+            public_ok = st.toggle(
+                "⚠ Allow public access", value=st.session_state.wa_public_ok,
+                help="Starts a tunnel that puts this whole assistant at a public "
+                     "https address. Anyone who reaches that address gets JARVIS "
+                     "with your file, app and PC tools - the address is unguessable "
+                     "but not private. Keeping this off and hosting the webhook "
+                     "somewhere without PC control is the safer setup.",
+            )
+            if t1.button("Start public tunnel", use_container_width=True,
+                         disabled=not public_ok,
+                         help="Runs Cloudflare's free quick tunnel so Meta can "
+                              "reach JARVIS on this PC."):
+                if not cloud.app_secret.strip():
+                    st.error("Paste the **App secret** above first. Without it Meta's "
+                             "delivery cannot be signature-checked, so a public address "
+                             "would accept forged messages from any number.")
+                    st.stop()
+                if not whatsapp_cloud.find_tunnel_binary():
+                    with st.spinner("Downloading cloudflared…"):
+                        try:
+                            whatsapp_cloud.download_cloudflared()
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(str(exc))
+                            st.stop()
+                with st.spinner("Opening a tunnel…"):
+                    try:
+                        url = whatsapp_cloud.start_tunnel()
+                        st.session_state.wa_cloud_note = f"Tunnel up — {url}"
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(str(exc))
+                st.rerun()
+            if whatsapp_cloud.tunnel_url():
+                if t2.button("Stop tunnel", use_container_width=True):
+                    whatsapp_cloud.stop_tunnel()
+                    st.rerun()
+            elif whatsapp_cloud.tunnel_error():
+                st.caption(f"Tunnel: {whatsapp_cloud.tunnel_error()}")
+
+            auto = st.toggle(
+                "🤖 JARVIS answers incoming messages",
+                value=bool(wa_prefs.get("auto_reply")),
+                help="Replies on its own with a plain, short answer. It runs "
+                     "without any tools, so nothing on this PC — no files, no "
+                     "apps, no mailbox — can be reached from WhatsApp.",
+            )
+            allowed_in = st.text_input(
+                "Only answer these numbers (blank = anyone)",
+                value=", ".join(wa_prefs.get("allowed_senders") or []),
+                placeholder="919876543210, 919000000000", key="_wa_allowed")
+            notify_in = st.text_input(
+                "Push my reminders & briefing to",
+                value=", ".join(wa_prefs.get("notify_to") or []),
+                placeholder="919876543210", key="_wa_notify",
+                help="Free texts only arrive while the 24-hour window is open — "
+                     "message the business number once from that phone first.")
+            whatsapp_cloud.save_prefs({
+                "auto_reply": bool(auto),
+                "allowed_senders": [whatsapp_cloud.normalize_number(x)
+                                    for x in allowed_in.split(",") if x.strip()],
+                "notify_to": [whatsapp_cloud.normalize_number(x)
+                              for x in notify_in.split(",") if x.strip()],
+            })
+            for line in (whatsapp_cloud.webhook_status(), whatsapp_cloud.reply_status()):
+                if line:
+                    st.caption(line)
+            recent = whatsapp_cloud.inbox(5)
+            if recent:
+                st.markdown("**Latest on the business number**")
+                for row in recent:
+                    arrow = "→" if row.get("direction") == "out" else "←"
+                    st.caption(f"{arrow} {row.get('at', '')} {row.get('name', '')}: "
+                               f"{str(row.get('text', ''))[:80]}")
+
+            sent_rows = whatsapp_cloud.outbox(5)
+            if sent_rows:
+                st.markdown("**What JARVIS has sent**")
+                for row in sent_rows:
+                    mark = "✅" if row.get("status") == "sent" else "❌"
+                    tail = "" if row.get("status") == "sent" else f" — {str(row.get('detail', ''))[:90]}"
+                    st.caption(f"{mark} {row.get('at', '')} → +{row.get('to', '')} "
+                               f"[{row.get('kind', '')}] {str(row.get('body', ''))[:60]}{tail}")
+
+    # ---- Proactivity: morning briefing + new-mail alerts ----
+    with st.expander("🌅 Proactivity — briefing & alerts", expanded=False):
+        st.session_state.briefing_on = st.toggle(
+            "🌅 Morning briefing",
+            value=st.session_state.briefing_on,
+            help="Once a day, after the hour below, JARVIS greets you with the "
+                 "date, your follow-ups and your mailbox.",
+        )
+        hours = list(range(5, 12))
+        cur_hour = st.session_state.briefing_hour if st.session_state.briefing_hour in hours else 8
+        picked = st.selectbox(
+            "Briefing time", hours, index=hours.index(cur_hour),
+            format_func=lambda h: f"{h:02d}:00",
+            disabled=not st.session_state.briefing_on,
+        )
+        st.session_state.briefing_hour = int(picked)
+        if cfg.ready:
+            st.session_state.mail_watch_on = st.toggle(
+                "📬 New-mail alerts",
+                value=st.session_state.mail_watch_on,
+                help="While JARVIS is open, he checks the inbox every couple of "
+                     "minutes and announces new mail. Read-only, as always.",
+            )
+        else:
+            st.session_state.mail_watch_on = False
+            st.caption("Connect email above to get new-mail alerts.")
+        if wa_state == "linked":
+            st.session_state.wa_watch_on = st.toggle(
+                "💬 New WhatsApp-message alerts",
+                value=st.session_state.wa_watch_on,
+                help="While JARVIS is open, he peeks at the WhatsApp sidebar "
+                     "every minute or so and announces new messages — read-only, "
+                     "nothing is marked as read.",
+            )
+        else:
+            st.session_state.wa_watch_on = False
+            st.caption("Link WhatsApp above to get new-message alerts.")
+        if cloud.ready:
+            wa_push = whatsapp_cloud.load_prefs()
+            push_briefing = st.toggle(
+                "🟢 Send the briefing to my WhatsApp",
+                value=bool(wa_push.get("notify_briefing")),
+                help="The same morning briefing lands on your phone through the "
+                     "WhatsApp Cloud API business number.",
+            )
+            push_reminders = st.toggle(
+                "🟢 Send follow-up reminders to my WhatsApp",
+                value=bool(wa_push.get("notify_reminders")),
+                help="Goes to the number(s) in “Push my reminders & briefing to” "
+                     "in the Cloud API panel above.",
+            )
+            whatsapp_cloud.save_prefs({
+                "notify_briefing": bool(push_briefing),
+                "notify_reminders": bool(push_reminders),
+            })
+            if not wa_push.get("notify_to"):
+                st.caption("Add a number in the Cloud API panel to receive them.")
+        proactive.save_prefs({
+            "briefing_on": st.session_state.briefing_on,
+            "briefing_hour": st.session_state.briefing_hour,
+            "mail_watch_on": st.session_state.mail_watch_on,
+            "wa_watch_on": st.session_state.wa_watch_on,
+        })
+        if st.session_state.mail_watch_on and cfg.ready:
+            proactive.start_mail_watch(cfg)
+        else:
+            proactive.stop_mail_watch()
+        mail_status = proactive.mail_watch_status()
+        if mail_status:
+            st.caption(mail_status)
+        if st.session_state.wa_watch_on and wa_state == "linked":
+            proactive.start_wa_watch()
+        else:
+            proactive.stop_wa_watch()
+        wa_status = proactive.wa_watch_status()
+        if wa_status:
+            st.caption(wa_status)
+
+    # ---- Vision (Gemini) ----
+    vision_key = (st.session_state.gemini_key or "").strip()
+    if vision_key:
+        eyes = "images and this PC's screen" if PC_CONTROL_AVAILABLE else "images"
+        st.caption(f"👁 Vision on: JARVIS can see {eyes}.")
+        with st.expander("📷 Show JARVIS an image", expanded=False):
+            up = st.file_uploader(
+                "Image", type=["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+                label_visibility="collapsed",
+            )
+            q = st.text_input(
+                "Question (optional)", value="",
+                placeholder="What is in this image?", key="_vision_q",
+            )
+            if up is not None and st.button("Look at it", use_container_width=True):
+                if not st.session_state.ready:
+                    st.warning("Initialize JARVIS first.")
+                else:
+                    try:
+                        path = vision.save_upload(up.name, up.getvalue())
+                        st.session_state.pending_image = path
+                        st.session_state.pending_voice = (
+                            q.strip()
+                            or "Look at this image and describe everything important in it."
+                        )
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Could not save the image: {exc}")
+        if st.button("Change vision key", use_container_width=True):
+            st.session_state.gemini_key = ""
+            if st.session_state.ready:
+                try:
+                    make_executor(st.session_state.api_key.strip(), st.session_state.model)
+                except Exception:  # noqa: BLE001
+                    pass
+            st.rerun()
+    else:
+        with st.expander("👁 Give JARVIS vision (Gemini)", expanded=False):
+            st.caption(
+                "Add a free Google AI Studio key and JARVIS can look at images"
+                + (" — and at your screen" if PC_CONTROL_AVAILABLE else "")
+                + ". Get one at aistudio.google.com/apikey. On a hosted deploy, "
+                "set GEMINI_API_KEY in the app's Secrets instead."
+            )
+            entered = st.text_input(
+                "Gemini API key", value="", type="password",
+                placeholder="AIza...", key="_vision_key",
+            )
+            if entered.strip():
+                st.session_state.gemini_key = entered.strip()
+                if os.getenv("GROQ_API_KEY"):
+                    saved = vision.save_key(st.session_state.gemini_key)
+                    st.session_state.vision_note = (
+                        f"Key saved to {saved} — JARVIS keeps his eyes." if saved
+                        else "Key active for this session only."
+                    )
+                else:
+                    st.session_state.vision_note = "Key active for this session only."
+                if st.session_state.ready:
+                    try:
+                        make_executor(st.session_state.api_key.strip(), st.session_state.model)
+                        st.toast("Vision armed.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Vision arm failed: {exc}")
+                st.rerun()
+    if st.session_state.vision_note:
+        st.caption(st.session_state.vision_note)
+
     caps = current_caps()
     if st.session_state.ready and caps != st.session_state.caps_applied:
         try:
@@ -858,6 +1405,30 @@ with st.sidebar:
             st.toast("Capabilities re-armed.")
         except Exception as exc:  # noqa: BLE001
             st.error(f"Re-arm failed: {exc}")
+
+    # The webhook runs outside any Streamlit session, so hand it what to answer
+    # with: the config, and a deliberately tool-free reply function. On a hosted
+    # deployment only .env credentials are used - one viewer's key must never
+    # answer another viewer's business number.
+    #
+    # On the desktop the global is only ever *replaced*, never blanked: the phone
+    # page and any extra window share this process with an empty session, and
+    # their reruns must not strip the credentials the main window connected with.
+    # Disconnecting clears it explicitly instead.
+    if PC_CONTROL_AVAILABLE:
+        runtime_cfg = cloud if cloud.ready else whatsapp_cloud.startup_config()
+        if runtime_cfg.ready:
+            whatsapp_cloud.set_runtime_config(runtime_cfg)
+    else:
+        whatsapp_cloud.set_runtime_config(None)
+    reply_key = _load_key_from_env() or (
+        st.session_state.api_key.strip() if PC_CONTROL_AVAILABLE else "")
+    if reply_key:
+        whatsapp_cloud.set_reply_handler(
+            lambda text, name, number, _k=reply_key, _m=st.session_state.model:
+                quick_reply(_k, _m, f"{name}: {text}"))
+    else:
+        whatsapp_cloud.set_reply_handler(None)
 
     if st.button("⏻ INITIALIZE JARVIS", use_container_width=True):
         if not st.session_state.api_key.strip():
@@ -881,6 +1452,14 @@ with st.sidebar:
             st.caption("⏰ Reminders: armed")
         if st.session_state.email_cfg.ready:
             st.caption("✉️ Mailbox: linked")
+        if st.session_state.gemini_key:
+            st.caption("👁 Vision: images" + (" + screen" if PC_CONTROL_AVAILABLE else ""))
+        if st.session_state.briefing_on:
+            st.caption(f"🌅 Briefing: after {int(st.session_state.briefing_hour):02d}:00")
+        if st.session_state.mail_watch_on:
+            st.caption("📬 New-mail alerts: on")
+        if st.session_state.wa_watch_on:
+            st.caption("💬 New WhatsApp-message alerts: on")
     else:
         st.markdown('STATUS: <span class="status-off">● OFFLINE</span>', unsafe_allow_html=True)
 
@@ -965,6 +1544,25 @@ with st.sidebar:
     lines.append("\n\n**Memory:** say “save this” — I keep it and remember it next time")
     if st.session_state.email_cfg.ready:
         lines.append("\n\n**Mailbox:** read-only inbox check")
+    if PC_CONTROL_AVAILABLE and whatsapp_control.quick_status() == "linked":
+        lines.append("\n\n**WhatsApp:** read chats & send by contact name")
+    if st.session_state.wa_cloud_cfg.ready:
+        bits = ["send by name or number", "templates", "broadcast"]
+        if whatsapp_cloud.load_prefs().get("auto_reply"):
+            bits.append("auto-answers incoming")
+        lines.append("\n\n**WhatsApp Cloud API:** " + " · ".join(bits))
+    if st.session_state.gemini_key:
+        lines.append("\n\n**Vision:** look at images"
+                     + (" and the screen" if PC_CONTROL_AVAILABLE else ""))
+    proactive_bits = []
+    if st.session_state.briefing_on:
+        proactive_bits.append(f"daily briefing at {int(st.session_state.briefing_hour):02d}:00")
+    if st.session_state.mail_watch_on:
+        proactive_bits.append("new-mail alerts")
+    if st.session_state.wa_watch_on:
+        proactive_bits.append("new WhatsApp-message alerts")
+    if proactive_bits:
+        lines.append("\n\n**Proactive:** " + " · ".join(proactive_bits))
     if wakeword.is_on():
         lines.append("\n\n**Hands-free:** say “Hello JARVIS” — I wake even when closed")
     lines.append("\n\nType or speak a task: research, calculate, summarise, plan, write, explain.")
@@ -1001,6 +1599,18 @@ if st.session_state.reminders_on:
         })
     if due and st.session_state.tts_enabled:
         speak("Reminder, Sir. " + "; ".join(str(i.get("text", "")) for i in due))
+
+# --------------------------------------------------------------------------- #
+# Proactive items: the daily briefing and new-mail alerts. The native popup
+# already fired; this keeps them in the chat and speaks them aloud.
+# --------------------------------------------------------------------------- #
+for item in proactive.pop_proactive():
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": item["text"],
+    })
+    if st.session_state.tts_enabled and item.get("speak"):
+        speak(item["speak"])
 
 # --------------------------------------------------------------------------- #
 # Handle voice recording -> transcription
@@ -1044,6 +1654,21 @@ st.markdown(
 )
 
 # --------------------------------------------------------------------------- #
+# WhatsApp Cloud API: whatever reached the business number since the last rerun.
+# Drained BEFORE the history renders, so a message the heartbeat woke us for
+# appears in this run instead of waiting for the next one.
+# --------------------------------------------------------------------------- #
+for wa_msg in whatsapp_cloud.pop_events():
+    wa_who = wa_msg.get("name") or wa_msg.get("from")
+    wa_body = str(wa_msg.get("text", ""))
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": f"💬 **WhatsApp from {wa_who}** — {wa_body}",
+    })
+    if st.session_state.tts_enabled:
+        speak(f"WhatsApp message from {wa_who}. {wa_body[:200]}")
+
+# --------------------------------------------------------------------------- #
 # Chat history
 # --------------------------------------------------------------------------- #
 for msg in st.session_state.messages:
@@ -1051,7 +1676,11 @@ for msg in st.session_state.messages:
         msg["role"],
         avatar=AVATAR_ASSISTANT if msg["role"] == "assistant" else AVATAR_USER,
     ):
+        if msg.get("img") and os.path.exists(msg["img"]):
+            st.image(msg["img"], width=300)
         st.markdown(msg["content"])
+        if msg.get("stopped"):
+            st.caption("⏹ Stopped by you — partial answer kept.")
 
 # --------------------------------------------------------------------------- #
 # Input handling (text or voice)
@@ -1069,12 +1698,13 @@ dictated = (
 
 prompt = text_prompt or st.session_state.pending_voice or dictated
 st.session_state.pending_voice = None
+img_path = st.session_state.pop("pending_image", "")
 
 if prompt:
     if not st.session_state.ready:
         st.warning("JARVIS is offline. Open **🔑 Unlock JARVIS** in the sidebar, enter your Groq API key and press **INITIALIZE JARVIS**.")
         st.stop()
-    run_and_render(prompt)
+    run_and_render(prompt, image_path=img_path or None)
 
 # Replay button -> speak the most recent assistant answer again.
 if st.session_state.replay:
@@ -1093,7 +1723,16 @@ st.markdown(
 # --------------------------------------------------------------------------- #
 # Hands-free tick: while the native listener holds the microphone, keep the page
 # re-running so a dictated command lands within a second or two of you saying it.
+# The heartbeat timer survives a missed tick, so the chain can always be nudged
+# back to life on the next dictated command instead of dying silently.
+# The same heartbeat surfaces an inbound WhatsApp Cloud API message: the server
+# only nudges a rerun when something is actually waiting, so an idle page costs
+# one tiny ping every few seconds.
 # --------------------------------------------------------------------------- #
+if (wakeword.is_supported() and (wakeword.is_on() or wakeword.prefers_on())) \
+        or st.session_state.wa_cloud_cfg.ready:
+    _render_heartbeat()
+
 if wakeword.is_supported() and wakeword.is_on():
     time.sleep(1.2)
     st.rerun()

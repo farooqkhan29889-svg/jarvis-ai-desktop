@@ -251,29 +251,6 @@ def open_application(name: str) -> str:
 
 
 @tool
-def send_whatsapp_message(number: str, message: str = "") -> str:
-    """Open WhatsApp to a specific contact number, pre-filled with a message.
-    Include the country code, e.g. '+919876543210'. The user still presses send."""
-    digits = "".join(c for c in (number or "") if c.isdigit() or c == "+")
-    if len(digits.lstrip("+")) < 6:
-        return "That phone number looks too short — please confirm it with the country code."
-    text = urllib.parse.quote(message or "")
-    if IS_WINDOWS and _uri_handler_exists("whatsapp"):
-        try:
-            os.startfile(f"whatsapp://send?phone={digits}&text={text}")  # noqa: S606
-            return f"Opening WhatsApp to {digits} with your message ready to send."
-        except OSError:
-            pass
-    fallback = f"https://wa.me/{digits.lstrip('+')}?text={text}"
-    webbrowser.open(fallback, new=2)
-    return (
-        f"WhatsApp Desktop is not installed here, so I opened wa.me for {digits} in "
-        "your browser instead — the chat will open with the message pre-filled once "
-        "you are logged into WhatsApp Web."
-    )
-
-
-@tool
 def open_item(path: str) -> str:
     """Open a file or folder on this PC with its default application
     (a document in Word, a folder in Explorer, an image in the viewer, ...)."""
@@ -417,7 +394,6 @@ PC_TOOLS = [
     open_website,
     search_in_browser,
     open_application,
-    send_whatsapp_message,
     open_item,
     list_folder,
     read_text_file,
@@ -430,7 +406,8 @@ PC_TOOLS = [
 PC_CONTROL_NOTES = (
     "\n\nPC CONTROL: you are running on the user's own Windows machine and you have "
     "real system tools — open_website, search_in_browser, open_application, "
-    "send_whatsapp_message, open_item, list_folder, read_text_file, create_text_file, "
+    "whatsapp_unread, whatsapp_read_chat, send_whatsapp_message, open_item, "
+    "list_folder, read_text_file, create_text_file, "
     "append_to_file, create_folder, system_status.\n"
     "When the user asks you to OPEN, LAUNCH, SHOW, PLAY or WRITE something on their PC, "
     "you MUST actually call the matching tool — NEVER just reply with a URL, a link or "
@@ -450,4 +427,12 @@ PC_CONTROL_NOTES = (
 
 
 def get_pc_tools() -> list:
-    return list(PC_TOOLS)
+    from whatsapp_control import WHATSAPP_TOOLS, WHATSAPP_NOTES
+
+    return list(PC_TOOLS) + WHATSAPP_TOOLS
+
+
+def get_pc_notes() -> str:
+    from whatsapp_control import WHATSAPP_NOTES
+
+    return PC_CONTROL_NOTES + WHATSAPP_NOTES

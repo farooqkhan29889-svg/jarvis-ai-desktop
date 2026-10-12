@@ -25,6 +25,9 @@ JARVIS is a tool-calling agent. It decides on its own when to use:
 | **Follow-up reminders** ⏰ | Saved list of tasks with due times; alerts you when one is due |
 | **Memory** 🧠 | Say *"save this"* and JARVIS keeps it forever — it also remembers important facts on its own |
 | **Email check** ✉️ | *Read-only* inbox — newest messages and unread count over IMAP |
+| **Vision** 👁 | JARVIS looks at images you attach — and, on desktop, at your screen — using a free Gemini key |
+| **Proactivity** 🌅 | A morning briefing, new-mail and new-WhatsApp alerts — JARVIS speaks up first |
+| **WhatsApp** 💬 | *Local desktop only* — read chats and send messages to any contact **by name**, through your own WhatsApp |
 
 ### PC control (local `.exe` / `run.bat` / `run_desktop.bat` only)
 
@@ -32,7 +35,8 @@ Say things like *"open WhatsApp and message Ali"*, *"search YouTube for lo-fi"*,
 *"what's on my Desktop?"*, *"make a note of this in Documents"*. JARVIS calls real
 Windows tools for it:
 
-`open_website` · `search_in_browser` · `open_application` · `send_whatsapp_message`
+`open_website` · `search_in_browser` · `open_application`
+· `whatsapp_unread` · `whatsapp_read_chat` · `send_whatsapp_message`
 · `open_item` · `list_folder` · `read_text_file` · `create_text_file`
 · `append_to_file` · `create_folder` · `system_status`
 
@@ -158,6 +162,176 @@ Guarantees:
   whatever voice preset is selected. If auto-detection guesses wrong, set
   **Speech language** in the sidebar to force Hindi or English.
 - If a browser blocks auto-play audio, press **🔊 Replay last reply**.
+- **It talks while it writes (flowing voice).** The answer streams into the chat
+  as it is written, and JARVIS speaks each finished sentence the moment it is
+  ready — he starts talking a second or two in, not after the whole answer is
+  done. While he is answering, a **⏹ Stop** button appears; press it and he
+  stops mid-answer — what he already said and wrote is kept.
+- **The desktop app comes online by itself.** When the packaged app starts with
+  your key saved in `.env`, JARVIS initializes on its own — no click needed. (On
+  the hosted web version you press **INITIALIZE JARVIS** once.)
+
+### Vision — JARVIS sees 👁
+JARVIS can look at pictures — and, on the desktop app, at your screen — using a
+**free Google Gemini key** (separate from your Groq key, which stays text-only).
+
+1. Get a free key at <https://aistudio.google.com/apikey> (sign in with any
+   Google account, *Create API key*, copy it). The free tier is plenty — images
+   cost nothing at normal use.
+2. In the sidebar open **👁 Give JARVIS vision (Gemini)** and paste the key.
+   On the desktop app it is saved to `.env` so it survives restarts; on the
+   hosted version put `GEMINI_API_KEY` in Streamlit Secrets instead. The key is
+   never shown back — the sidebar only says *Vision on*.
+3. Use it three ways:
+   - **Attach a picture:** in the sidebar *📷 Show JARVIS an image* → choose a
+     file → ask e.g. *"what is written in this chart?"*.
+   - **Ask about your screen** (desktop app): *"look at my screen — read the
+     error"* or *"what's on my screen?"* — JARVIS takes the screenshot himself.
+   - **By path:** *"look at C:\Users\me\Desktop\receipt.png and tell me the
+     total"* — he reads files in your own folders only.
+
+- **Your image goes straight to Google, nowhere else.** Only the answer text
+  comes back through Groq. Images are sent with your own Gemini key and are not
+  stored by JARVIS.
+- GIF and BMP files are converted to PNG automatically; files over 8 MB are
+  refused with a friendly message.
+- Until a key is set, JARVIS answers image questions "blind" and says so.
+
+### Proactivity — briefing & alerts 🌅
+
+JARVIS doesn't only answer — he speaks up on his own. Open **🌅 Proactivity —
+briefing & alerts** in the sidebar:
+
+- **🌅 Morning briefing.** Once a day, after the hour you choose (05:00–11:00),
+  JARVIS greets you with the date, your open follow-ups ("2 things today — call
+  Ali at 18:00…"), your unread mail count and your unread WhatsApp chats. It
+  arrives as a chat message, a native popup and — with voice on — as speech. It
+  fires once per day; if the app was closed at the set hour, you get it at the
+  next start.
+- **📬 New-mail alerts.** Needs email connected (above). JARVIS quietly checks
+  the inbox every couple of minutes (*read-only*, like all email) and tells you
+  the moment something new arrives: *"📬 New mail from Ali — subject"*. The
+  first check never alerts on existing mail — only what arrives **after** you
+  switch it on.
+- **💬 New WhatsApp-message alerts.** Needs WhatsApp linked (above). While the
+  app is open, JARVIS peeks at the WhatsApp sidebar every minute or so and
+  speaks up the moment a chat's unread count grows: *"💬 New WhatsApp from
+  Ali — meeting moved to 6"*. Pure sidebar peek — **nothing is ever marked as
+  read**. The first check never alerts on existing unread; messages that
+  arrived while the app was closed are announced once it runs again.
+- All settings live in `~/.jarvis/proactive.json` and survive restarts. The
+  briefing and both watchers run inside the JARVIS app, so the app must be
+  running (the wake-word listener alone will not deliver them).
+
+### WhatsApp — read & send by name 💬 (local desktop only)
+
+JARVIS drives **your own WhatsApp** through WhatsApp Web, in a small separate
+Edge window — your normal browser and your phone stay untouched:
+
+- **One-time link.** Open **💬 Link WhatsApp (one-time QR)** in the sidebar →
+  **Open WhatsApp login** → scan the QR with your phone (WhatsApp → Settings →
+  **Linked devices** → **Link a device**). The link lasts for weeks; JARVIS
+  reuses the same window whenever you ask.
+- **See your messages.** *"check my whatsapp"* (unread chats) · *"what did Ali
+  say?"* · *"read my last messages with Ali"*.
+- **Send by name — no number needed.** *"send whatsapp to Ali saying I will
+  reach the clinic by 10"* — JARVIS searches the name in WhatsApp, opens the
+  right chat (and tells you exactly which contact it picked), types the message
+  and delivers it. It re-reads the chat afterwards to confirm the message went
+  out, and says so.
+- **Deliberate by design.** It sends only when you ask, to the contact you
+  named; it reports the resolved contact name so a near-match never goes to the
+  wrong person.
+- If the link drops or the window was closed, JARVIS says how to relink instead
+  of guessing. Session state lives in `~/.jarvis/` (`wa-edge` profile +
+  `wa_cdp.json`); the sidebar shows *💬 WhatsApp linked* while connected.
+
+### WhatsApp Cloud API — a business number that answers itself 🟢
+
+The official **Meta WhatsApp Cloud API** channel, for a WhatsApp *Business*
+number. No browser window, no QR code — JARVIS talks to Meta's Graph API
+directly, so it also works when nobody is sitting at the PC.
+
+| | WhatsApp Web (above) | Cloud API (this) |
+|---|---|---|
+| Account | your personal WhatsApp | a Business number you own |
+| Reach | any of your contacts | numbers that are saved, or that messaged you |
+| Reads your chats | yes | no — only what arrives at the business number |
+| Works headless | needs the Edge window | yes |
+
+**What it does**
+
+- **Send by name or number.** *"whatsapp Ali on the business number that the
+  report is ready"* → `whatsapp_business_send`. Save people once with
+  *"save Ali's whatsapp number as 919876543210"* and names work from then on.
+- **Templates.** *"send the appointment_reminder template to Ali with his name
+  and the time"* → `whatsapp_business_template`. A template is the **only** way
+  to open a conversation with someone who has not messaged the business in the
+  last 24 hours — Meta enforces that, and JARVIS explains it rather than
+  failing silently.
+- **Broadcast.** *"tell everyone on whatsapp the clinic is closed tomorrow"* →
+  `whatsapp_business_broadcast` (whole contact book or a named list). JARVIS
+  confirms before sending to more than two people.
+- **Replies on its own.** Turn on **🤖 JARVIS answers incoming messages** and
+  every message that lands on the business number gets an automatic answer.
+  That responder runs **with no tools at all** — a stranger on WhatsApp can
+  never reach your files, apps, mailbox or browser.
+- **Reads them back to you.** *"who messaged us on whatsapp"* →
+  `whatsapp_business_inbox`, and each arrival also appears in the chat window
+  and is spoken aloud.
+- **Pushes your alerts to your phone.** In 🌅 Proactivity, switch on *send the
+  briefing / follow-up reminders to my WhatsApp*.
+
+**One-time setup (about 10 minutes, on Meta's site)**
+
+1. <https://developers.facebook.com> → **Create app** → type **Business** →
+   add the **WhatsApp** product.
+2. **WhatsApp → API Setup** gives you a *temp* token, a **Phone number ID** and
+   a **WhatsApp Business Account ID**. The test number can only message **5
+   recipient numbers you verify** there.
+3. Make the token **permanent** (temp ones expire in ~24 h): Business Settings
+   → **Users → System Users** → create a user with *Admin* → **Generate new
+   token** → pick your app → add the `whatsapp_business_messaging` and
+   `business_management` permissions → **no expiry**. Copy it.
+4. In JARVIS: sidebar → **🟢 Meta WhatsApp Cloud API** → paste the token, the
+   Phone Number ID and the Business Account ID → **Connect & test**. JARVIS
+   asks Meta to confirm and shows your verified business name. Tick
+   **Remember on this PC** to keep it in `~/.jarvis` (never in the project
+   folder), or put it in `.env` instead.
+5. **To receive messages** Meta needs a public HTTPS address, and the honest
+   options are not equal:
+
+   - **Hosted (recommended).** Deploy this same `app.py` somewhere public
+     (Streamlit Cloud works — it is already in this repo) and put the
+     `JARVIS_WA_*` values in that host's secrets. A hosted copy has **no PC
+     control at all** by design, so a business number answering strangers is
+     exactly what it is safe to expose. Register Meta's webhook against that
+     address.
+   - **Tunnel from this laptop.** Tick **⚠ Allow public access** and press
+     **Start public tunnel** — JARVIS fetches Cloudflare's free `cloudflared`,
+     opens the tunnel and prints the callback URL. **Read the warning first:**
+     a quick tunnel publishes every route on this port to the internet, not
+     just the webhook, and on the desktop build that port serves the assistant
+     *with* your file, app and PC tools. Anyone who reaches that address can
+     use JARVIS on your laptop. So the tunnel also refuses to start until the
+     **App secret** field is filled in — without it Meta's deliveries cannot be
+     signature-checked and anyone finding the address could feed JARVIS forged
+     messages from any number.
+
+   Paste the callback URL into **WhatsApp → Configuration → Webhook** with the
+   verify token shown next to it, then subscribe to the **messages** field.
+   (Skip this step if you only want to send.)
+
+**Files it writes** (all in `~/.jarvis/`, nothing secret unless you tick
+*Remember*): `wa_cloud_prefs.json`, `wa_cloud_contacts.json`,
+`wa_cloud_inbox.json`, `wa_cloud_outbox.json` (a trail of everything JARVIS
+sent: number, truncated text, status, Meta's message id or refusal reason),
+optionally `wa_cloud.json`.
+
+**Cost.** Meta charges per message category: user-initiated *service*
+conversations inside the 24-hour window are free, business-initiated
+*marketing/utility/authentication* templates are billed. Check Meta's current
+rates before a large broadcast.
 
 ### Always-on wake word — say "Hello JARVIS", any time
 
@@ -179,6 +353,10 @@ not by the browser — so it works whether or not the JARVIS window is open:
   rights needed.
 - **It keeps the PC awake while it listens** (sleep would deafen it). The display
   still switches off normally.
+- **Dictated commands are never missed.** A hidden heartbeat in the page checks
+  for your command every few seconds, so even if a long answer has stalled the
+  app's own update loop, a command you dictate is picked up and answered within
+  a few seconds.
 - **Opt-in:** the microphone is only in use while that switch is on. Flip it off
   and the listener stops, the Startup shortcut is deleted, and the wish is unset.
 - Needs the Windows Speech Recognition engine for your display language (en-US by
@@ -257,13 +435,14 @@ The app opens at `http://localhost:8501`.
 - "Who is Nikola Tesla? Give me a short profile."
 - "Plan my day: I have a clinic at 9, a call at 2, and gym at 6."
 - "Write a polite email rescheduling an appointment to next Tuesday."
-- 🖥 "Open Notepad." / "Open WhatsApp and message +9198765xxxxx saying I'll be late."
+- 🖥 "Open Notepad." / "Open WhatsApp and message Ali saying I'll be late."
 - 🖥 "Search YouTube for stomach exercises and show me." / "What files are on my Desktop?"
 - 🖥 "Save these notes to Documents/clinic-notes.md."
 - ⏰ "Remind me to follow up with the lab tomorrow at 10." / "What follow-ups are open?"
 - ⏰ "Mark the lab one done." / "Remind me to check the register in 30 minutes."
 - 🧠 "Save this: Dr. Sharma prefers evening appointments." / "What do you remember about me?"
 - ✉️ "Any new emails?" / "How many unread messages do I have?" / "Check for mail from Ali."
+- 💬 "Check my whatsapp." / "What did Ali say?" / "Send whatsapp to Dr. Sharma saying the meeting moved to 5."
 - 🗣 With **Always listen** on: say **"Hello JARVIS"**, then *"what is the date today?"* —
   from the desktop, the kitchen, or with JARVIS's window never opened.
 
@@ -285,7 +464,8 @@ Then edit `.env` and set `GROQ_API_KEY=gsk_...`. The app loads it automatically.
 jarvice-ai-dekstop/
 ├── app.py            # Streamlit JARVIS interface (HUD, chat, voice, wake word)
 ├── agent.py          # LangChain + Groq agent, tools, and Whisper transcription
-├── system_control.py # sandboxed PC tools (apps, websites, WhatsApp, files)
+├── system_control.py # sandboxed PC tools (apps, websites, files)
+├── whatsapp_control.py # WhatsApp Web via Edge CDP — read chats & send by contact name
 ├── followups.py      # reminder store, due-time parser and background watcher
 ├── memory.py         # persistent memory: facts JARVIS saves (asked or on its own)
 ├── email_control.py  # read-only IMAP inbox tools
@@ -328,13 +508,28 @@ jarvice-ai-dekstop/
   Settings → Time & language → Speech is installed for your language, and that no
   other app holds the mic exclusively. `~/.jarvis/wake_listener.log` records every
   phrase it understood.
+- **JARVIS can't see?** Vision needs a (free) Gemini key — open
+  **👁 Give JARVIS vision (Gemini)** in the sidebar and paste one from
+  <https://aistudio.google.com/apikey>. Until then it answers image questions
+  "blind" and says so. A rejected key is reported right in its reply.
+- **No briefing / no mail alerts?** The briefing waits until the clock passes the
+  hour you picked (sidebar → **🌅 Proactivity**) and fires once a day — closed app
+  means it arrives at the next launch. Mail alerts need email connected *and* the
+  toggle on; the first run never announces existing mail, only what arrives from
+  then on. Both need one page load after switching on, and the app must stay open.
+- **WhatsApp not linked?** Open **💬 Link WhatsApp (one-time QR)** in the sidebar
+  and scan once (WhatsApp → Settings → Linked devices → Link a device). The
+  separate Edge window must stay logged in — if the sidebar says *Waiting for
+  the scan*, refresh the QR window. Sending/reading needs the app running on
+  the desktop; the hosted web version has no WhatsApp.
 - **Nothing wakes after a reboot?** Sign-in starts the listener, but a PC that is
   powered off or hibernated cannot hear you — while listening, JARVIS only asks
   Windows not to *sleep* (the display still switches off as usual).
 - **Where is my wake-word state kept?** `~/.jarvis/` — `wake_config.json` (your
   wish + where JARVIS lives), `wake_status.json` (live listener status),
   `wake_command.json` (the last dictated command), `wake_listener.log`. Memories
-  live in `memory.json` and follow-ups in `followups.json` in the same folder.
+  live in `memory.json`, follow-ups in `followups.json` and the briefing /
+  mail-alert settings in `proactive.json` in the same folder.
   Delete the folder to reset; the Startup shortcut is
   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JARVIS.lnk`.
 - **Want a true installable desktop app (window, icon)?** Next step is wrapping

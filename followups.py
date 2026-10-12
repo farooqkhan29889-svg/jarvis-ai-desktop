@@ -182,6 +182,21 @@ def _popup(title: str, message: str) -> None:
     threading.Thread(target=show, daemon=True).start()
 
 
+def _push_whatsapp(text: str) -> None:
+    """Also send a due reminder to the phone, when that is switched on.
+
+    Threaded: a slow Graph API call must never hold up the scheduler tick.
+    """
+    try:
+        import whatsapp_cloud
+
+        if whatsapp_cloud.load_prefs().get("notify_reminders"):
+            threading.Thread(target=whatsapp_cloud.notify, args=(text,),
+                             name="jarvis-wa-push", daemon=True).start()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # --------------------------------------------------------------------------- #
 # Scheduler
 # --------------------------------------------------------------------------- #
@@ -203,6 +218,7 @@ def _tick() -> None:
                     _announced.append(dict(it))
                     changed = True
                     _popup("J.A.R.V.I.S. — reminder", f"{it['text']}\n\n(scheduled {it['due']})")
+                    _push_whatsapp(f"Reminder: {it['text']} (scheduled {it['due']})")
         if changed:
             _save(items)
 
