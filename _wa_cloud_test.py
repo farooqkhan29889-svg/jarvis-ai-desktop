@@ -38,6 +38,32 @@ check("normalize strips leading 00", wc.normalize_number("00919876543210"), "919
 check_true("valid number", wc.valid_number("919876543210"))
 check_true("rejects short number", not wc.valid_number("12345"))
 
+# ---- hosted deployment: Streamlit Secrets are a config source too ----
+import types as _types
+
+_real_st = sys.modules.get("streamlit")
+sys.modules["streamlit"] = _types.SimpleNamespace(secrets={
+    "JARVIS_WA_TOKEN": "EAAhosttoken", "JARVIS_WA_PHONE_ID": "4455667788990011",
+    "JARVIS_WA_WABA_ID": "9988776655443322", "JARVIS_WA_APP_SECRET": "b" * 32,
+})
+try:
+    hosted = wc.from_env()
+finally:
+    if _real_st is not None:
+        sys.modules["streamlit"] = _real_st
+    else:
+        sys.modules.pop("streamlit", None)
+check_true("reads the Cloud API config from Streamlit Secrets", hosted.ready)
+check("Secrets fill the phone id and app secret",
+      (hosted.phone_number_id, hosted.app_secret), ("4455667788990011", "b" * 32))
+check("defaults still apply when Secrets omit them",
+      (hosted.verify_token, hosted.api_version), ("jarvis-whatsapp", "v25.0"))
+os.environ["JARVIS_WA_TOKEN"] = "EAAenvtoken"
+check("the environment wins over Secrets", wc.from_env().token, "EAAenvtoken")
+os.environ.pop("JARVIS_WA_TOKEN", None)
+check_true("nothing in Secrets and nothing in env stays unconfigured",
+           not wc.from_env().ready)
+
 # ---- contacts ----
 print(wc.save_contact("Ali Khan", "+91 98765 43210", "supplier"))
 num, name = wc.resolve("ali")

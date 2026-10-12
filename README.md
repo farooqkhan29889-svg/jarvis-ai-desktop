@@ -592,11 +592,20 @@ in `.streamlit/config.toml`).
 1. Push this folder to a GitHub repo (see commands in your terminal / below).
 2. Go to <https://share.streamlit.io> → sign in with GitHub → **New app**.
 3. Pick the repo, branch `main`, main file path `app.py` → **Deploy**.
-4. In the Cloud dashboard: **Settings → Secrets** → add:
+4. In **Settings → Secrets**, add one line per value, named exactly as in
+   `.env`:
    ```toml
-   GROQ_API_KEY = "gsk_your_key_here"
+   GROQ_API_KEY    = "gsk_your_key_here"
+   GEMINI_API_KEY  = "your_gemini_key"
+   JARVIS_WA_TOKEN = "your_permanent_meta_token"
+   JARVIS_WA_PHONE_ID = "123456789012345"
+   JARVIS_WA_WABA_ID  = "987654321098765"
+   JARVIS_WA_APP_SECRET = "your_app_secret"
    ```
-   (The app reads `st.secrets["GROQ_API_KEY"]`; never commit a real key.)
+   Never put a real key in the repo. The app reads `st.secrets` *and* `.env`
+   because Community Cloud does **not** expose Secrets as environment variables
+   - a `JARVIS_WA_*` value reachable only through `os.environ` would be
+   invisible to the hosted copy, and WhatsApp would look unconfigured there.
 5. Your JARVIS is live at `https://<app>.streamlit.app`.
 
 > Voice input (mic) and the wake word work in the deployed web version too, in

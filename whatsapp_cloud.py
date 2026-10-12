@@ -129,18 +129,35 @@ DEFAULT_PREFS = {
 }
 
 
+def _setting(key: str) -> str:
+    """A value from the environment, then from Streamlit Secrets.
+
+    The desktop reads `.env` (which lands in os.environ); Streamlit Community
+    Cloud puts its Secrets in `st.secrets` and *not* in the environment. Both
+    use these same names, so one deployment file works on either.
+    """
+    value = os.environ.get(key, "").strip()
+    if value:
+        return value
+    try:
+        import streamlit as st
+
+        raw = st.secrets.get(key, "")
+    except Exception:  # noqa: BLE001 - no secrets file / no Streamlit runtime
+        return ""
+    return str(raw).strip()
+
+
 def from_env() -> CloudConfig:
-    """Config from .env / environment - the place secrets belong."""
+    """Config from .env / environment / Streamlit Secrets."""
     return CloudConfig(
-        token=os.environ.get("JARVIS_WA_TOKEN", "").strip(),
-        phone_number_id=os.environ.get("JARVIS_WA_PHONE_ID", "").strip(),
-        waba_id=os.environ.get("JARVIS_WA_WABA_ID", "").strip(),
-        app_secret=os.environ.get("JARVIS_WA_APP_SECRET", "").strip(),
-        verify_token=(os.environ.get("JARVIS_WA_VERIFY_TOKEN", "").strip()
-                      or "jarvis-whatsapp"),
-        api_version=(os.environ.get("JARVIS_WA_API_VERSION", "").strip()
-                     or DEFAULT_API_VERSION),
-        business_name=os.environ.get("JARVIS_WA_BUSINESS_NAME", "").strip(),
+        token=_setting("JARVIS_WA_TOKEN"),
+        phone_number_id=_setting("JARVIS_WA_PHONE_ID"),
+        waba_id=_setting("JARVIS_WA_WABA_ID"),
+        app_secret=_setting("JARVIS_WA_APP_SECRET"),
+        verify_token=(_setting("JARVIS_WA_VERIFY_TOKEN") or "jarvis-whatsapp"),
+        api_version=(_setting("JARVIS_WA_API_VERSION") or DEFAULT_API_VERSION),
+        business_name=_setting("JARVIS_WA_BUSINESS_NAME"),
     )
 
 
